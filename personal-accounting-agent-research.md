@@ -355,7 +355,7 @@ Agent flow:
 2. Dispatch transaction-processor subagent
 3. Dispatch category-classifier subagent
 4. Return summary: "Processed 247 transactions from 3 accounts.
-   Top categories: Food ($1,240), Housing ($2,100), Transport ($380)"
+   Top categories: Food (₹1,05,400), Housing (₹1,78,500), Transport (₹32,300)"
 ```
 
 ### Monthly Report
@@ -387,7 +387,7 @@ Agent flow:
 ### Budget Tracking
 
 ```
-User: "Set a $500/month dining budget and alert me when I'm at 80%"
+User: "Set a ₹15,000/month dining budget and alert me when I'm at 80%"
 
 Agent flow:
 1. Creates/updates ./accounting-data/budgets.json
@@ -488,11 +488,11 @@ Agent flow:
 
 | Operation | Model | Est. Tokens | Est. Cost |
 |-----------|-------|-------------|-----------|
-| Import 100 transactions | Haiku 4.5 | ~5K in / 2K out | ~$0.02 |
-| Categorize 100 transactions | Haiku 4.5 | ~10K in / 5K out | ~$0.04 |
-| Generate monthly report | Opus 4.6 | ~20K in / 5K out | ~$0.23 |
-| Tax deduction analysis | Opus 4.6 | ~50K in / 10K out | ~$0.50 |
-| Full monthly workflow | Mixed | ~100K total | ~$1.00 |
+| Import 100 transactions | Haiku 4.5 | ~5K in / 2K out | ~₹1.70 |
+| Categorize 100 transactions | Haiku 4.5 | ~10K in / 5K out | ~₹3.50 |
+| Generate monthly report | Opus 4.6 | ~20K in / 5K out | ~₹20 |
+| Tax deduction analysis | Opus 4.6 | ~50K in / 10K out | ~₹42 |
+| Full monthly workflow | Mixed | ~100K total | ~₹85 |
 
 **Optimization tips:**
 - Use Haiku 4.5 for high-volume classification subagents

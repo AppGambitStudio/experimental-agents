@@ -953,13 +953,13 @@ Agent flow:
 
 | Operation | Model | Est. Tokens | Est. Cost |
 |-----------|-------|-------------|-----------|
-| Daily deadline check | Haiku 4.5 | ~3K in / 1K out | ~$0.01 |
-| Weekly compliance summary | Sonnet 4.6 | ~15K in / 5K out | ~$0.08 |
-| GST reconciliation (150 invoices) | Sonnet 4.6 | ~30K in / 10K out | ~$0.15 |
-| GSTR-1 preparation checklist | Sonnet 4.6 | ~20K in / 8K out | ~$0.11 |
-| Penalty calculation | Haiku 4.5 | ~2K in / 1K out | ~$0.01 |
-| Government notification scan | Sonnet 4.6 | ~10K in / 3K out | ~$0.05 |
-| Full monthly compliance cycle | Mixed | ~150K total | ~$1.50 |
+| Daily deadline check | Haiku 4.5 | ~3K in / 1K out | ~₹0.85 |
+| Weekly compliance summary | Sonnet 4.6 | ~15K in / 5K out | ~₹7 |
+| GST reconciliation (150 invoices) | Sonnet 4.6 | ~30K in / 10K out | ~₹13 |
+| GSTR-1 preparation checklist | Sonnet 4.6 | ~20K in / 8K out | ~₹9 |
+| Penalty calculation | Haiku 4.5 | ~2K in / 1K out | ~₹0.85 |
+| Government notification scan | Sonnet 4.6 | ~10K in / 3K out | ~₹4 |
+| Full monthly compliance cycle | Mixed | ~150K total | ~₹125 |
 
 **Optimization tips:**
 - Use Haiku 4.5 for simple lookups, notifications, and alerts

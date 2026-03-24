@@ -1847,16 +1847,16 @@ Agent flow:
 
 | Operation | Model | Est. Tokens | Est. Cost |
 |-----------|-------|-------------|-----------|
-| Single vendor onboarding (full) | Mixed | ~50K total | ~$0.50 |
-| Government validation (5 APIs) | Sonnet 4.6 | ~15K in / 5K out | ~$0.08 |
-| Risk score calculation | Opus 4.6 | ~20K in / 5K out | ~$0.23 |
-| TDS section determination | Sonnet 4.6 | ~5K in / 2K out | ~$0.03 |
-| Document OCR + extraction | Sonnet 4.6 | ~10K in / 3K out | ~$0.05 |
-| Approval workflow routing | Haiku 4.5 | ~3K in / 1K out | ~$0.01 |
-| ERP master creation | Sonnet 4.6 | ~8K in / 3K out | ~$0.04 |
-| Bulk verification (50 vendors) | Mixed | ~200K total | ~$2.00 |
-| Quarterly monitoring (per vendor) | Sonnet 4.6 | ~10K total | ~$0.05 |
-| Monthly cost (50 vendors, ongoing) | Mixed | ~500K total | ~$5.00 |
+| Single vendor onboarding (full) | Mixed | ~50K total | ~₹42 |
+| Government validation (5 APIs) | Sonnet 4.6 | ~15K in / 5K out | ~₹7 |
+| Risk score calculation | Opus 4.6 | ~20K in / 5K out | ~₹20 |
+| TDS section determination | Sonnet 4.6 | ~5K in / 2K out | ~₹2.50 |
+| Document OCR + extraction | Sonnet 4.6 | ~10K in / 3K out | ~₹4 |
+| Approval workflow routing | Haiku 4.5 | ~3K in / 1K out | ~₹0.85 |
+| ERP master creation | Sonnet 4.6 | ~8K in / 3K out | ~₹3.50 |
+| Bulk verification (50 vendors) | Mixed | ~200K total | ~₹170 |
+| Quarterly monitoring (per vendor) | Sonnet 4.6 | ~10K total | ~₹4 |
+| Monthly cost (50 vendors, ongoing) | Mixed | ~500K total | ~₹425 |
 
 **Optimization tips:**
 - Use Haiku 4.5 for notifications, simple lookups, and form parsing

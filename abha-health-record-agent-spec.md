@@ -1534,25 +1534,25 @@ type AuditAction =
 
 | Operation | Model | Tokens (est.) | Cost (est.) |
 |-----------|-------|---------------|-------------|
-| Portal navigation decisions (per page) | Haiku | ~500 input + 200 output | ~$0.001 |
-| Record listing & parsing portal text | Sonnet | ~2,000 input + 500 output | ~$0.01 |
-| Per record: PDF text analysis | Sonnet | ~3,000 input + 1,000 output | ~$0.015 |
-| Health summary generation | Opus | ~10,000 input + 3,000 output | ~$0.20 |
-| Consent analysis | Sonnet | ~1,500 input + 500 output | ~$0.01 |
+| Portal navigation decisions (per page) | Haiku | ~500 input + 200 output | ~₹0.10 |
+| Record listing & parsing portal text | Sonnet | ~2,000 input + 500 output | ~₹0.85 |
+| Per record: PDF text analysis | Sonnet | ~3,000 input + 1,000 output | ~₹1.25 |
+| Health summary generation | Opus | ~10,000 input + 3,000 output | ~₹17 |
+| Consent analysis | Sonnet | ~1,500 input + 500 output | ~₹0.85 |
 
 **Typical first-time sync (25 records):**
-- Navigation + discovery: ~$0.05
-- Download & categorize (25 records): ~$0.15
-- Parse all records: ~$0.40
-- Generate summaries: ~$0.60
-- **Total: ~$1.20**
+- Navigation + discovery: ~₹4
+- Download & categorize (25 records): ~₹13
+- Parse all records: ~₹34
+- Generate summaries: ~₹51
+- **Total: ~₹100**
 
 **Incremental sync (2-3 new records):**
-- Navigation + discovery: ~$0.03
-- Download & categorize: ~$0.02
-- Parse new records: ~$0.05
-- Update summaries: ~$0.20
-- **Total: ~$0.30**
+- Navigation + discovery: ~₹2.50
+- Download & categorize: ~₹1.70
+- Parse new records: ~₹4
+- Update summaries: ~₹17
+- **Total: ~₹25**
 
 ### Local Resource Usage
 
