@@ -1,0 +1,18 @@
+# Experimental Agents
+
+Research documents and specifications for building production-grade AI agents using the Claude Agent SDK.
+
+## Playbook
+
+| Document | Description |
+|----------|-------------|
+| [Deep Agent Infrastructure Playbook](deep-agent-infrastructure-playbook.md) | Comprehensive guide covering shared infrastructure patterns, architectural decisions, and implementation techniques for building deep agents. Covers tool design, MCP integration, orchestration, error handling, and deployment. |
+
+## Agent Specs
+
+| Agent | Description |
+|-------|-------------|
+| [SOC 2 Compliance Agent](soc2-compliance-agent-spec.md) | Manages the complete SOC 2 compliance lifecycle — scoping, control mapping, policy generation, evidence collection, gap assessment, remediation tracking, auditor coordination, and continuous monitoring. |
+| [Vendor Onboarding Agent (India)](vendor-onboarding-agent-spec.md) | Handles end-to-end vendor onboarding for Indian businesses — document collection, government API validation (GSTIN, PAN, Udyam, MCA, Bank), compliance screening, risk scoring, approval workflows, and ERP master creation. |
+| [Statutory Compliance Calendar Agent (India)](statutory-compliance-calendar-agent-spec.md) | Tracks, alerts, prepares, and assists in filing 30+ recurring statutory compliance obligations across GST, Income Tax, TDS/TCS, PF, ESI, Professional Tax, ROC/MCA, and state-level filings for Indian businesses. |
+| [Personal Accounting Agent](personal-accounting-agent-research.md) | Research document for an AI-powered personal accountant that handles financial data processing, categorization, reconciliation, reporting, and insights. |
