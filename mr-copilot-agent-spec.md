@@ -64,7 +64,7 @@ The Agent SDK is ideal because MR Copilot requires:
                     │       MR Copilot Agent                 │
                     │      (Field Orchestrator)               │
                     │                                        │
-                    │   Claude Agent SDK + 4 MCP Servers     │
+                    │   Claude Agent SDK + 6 MCP Servers     │
                     └──────────────┬────────────────────────┘
                                    │
          ┌───────────┬─────────────┼─────────────┬────────────┐
@@ -87,6 +87,26 @@ The Agent SDK is ideal because MR Copilot requires:
    │                     analytics-mcp                           │
    │                     (Manager dashboards, coaching signals,  │
    │                      KPI tracking, team performance)        │
+   └──────────────────────────┬─────────────────────────────────┘
+                              │
+   ┌──────────────────────────▼─────────────────────────────────┐
+   │              Specialized Model Layer (MCP-wrapped)          │
+   │                                                             │
+   │  medgemma-mcp              medasr-mcp                       │
+   │  (MedGemma 1.5 4B —       (MedASR — medical speech-to-     │
+   │   medical image interp,    text, pharma terminology,        │
+   │   lab report extraction,   Hinglish medical dictation,      │
+   │   clinical document        82% fewer errors vs Whisper)     │
+   │   understanding)                                            │
+   │                                                             │
+   │  Fine-tuned via Unsloth Studio on company-specific data:    │
+   │  • Product formulary & clinical positioning                 │
+   │  • Regional prescribing patterns from RCPA                  │
+   │  • Company-specific brand names & molecule mappings          │
+   │  • Historical doctor interaction transcripts                │
+   │                                                             │
+   │  Deployment: Private infra (on-prem GPU) or hosted cloud    │
+   │  (Vertex AI / custom endpoint)                              │
    └────────────────────────────────────────────────────────────┘
 ```
 
@@ -99,6 +119,7 @@ The Agent SDK is ideal because MR Copilot requires:
 | **Post-Call Engine** | Automated DCR generation from voice/text notes + geolocation, CRM update, follow-up scheduling, sample/input logging, commitment tracking | `crm-mcp` + `field-ops-mcp` |
 | **Territory & Route Optimizer** | Daily route planning based on call targets, doctor availability, geography, visit frequency compliance, high-priority flags | `field-ops-mcp` |
 | **Manager Intelligence Engine** | Team performance dashboards, coaching signals (under-visited doctors, product coverage gaps, compliance risks), territory analysis | `analytics-mcp` |
+| **Medical AI Layer** | Specialized models for medical document understanding (lab reports, prescriptions), medical speech-to-text with pharma vocabulary, and clinical image interpretation — fine-tuned on company data via Unsloth Studio | `medgemma-mcp` + `medasr-mcp` |
 
 ### End-to-End Daily Workflow
 
@@ -243,18 +264,27 @@ The Agent SDK is ideal because MR Copilot requires:
 ```
 Language:        TypeScript (Node.js)
 Agent SDK:       @anthropic-ai/claude-agent-sdk
-Model:           claude-opus-4-6 (RCPA trend analysis, competitive strategy, coaching signals)
+Models:
+  Orchestration: claude-opus-4-6 (RCPA trend analysis, competitive strategy, coaching signals)
                  claude-sonnet-4-6 (pre-call briefs, objection handling, DCR generation)
                  claude-haiku-4-5 (product lookups, dosage queries, quick calculations)
-MCP Servers:     4 custom — crm-mcp, pharma-intel-mcp, field-ops-mcp, analytics-mcp
+  Specialized:   MedGemma 1.5 4B (medical document understanding, lab report extraction,
+                   clinical image interpretation — fine-tuned via Unsloth Studio)
+                 MedASR (medical speech-to-text, pharma vocabulary, 5.2% WER vs
+                   Whisper's 12.5% on medical dictation)
+Fine-tuning:     Unsloth Studio (LoRA + RL fine-tuning on company-specific pharma data)
+MCP Servers:     6 custom — crm-mcp, pharma-intel-mcp, field-ops-mcp, analytics-mcp,
+                            medgemma-mcp, medasr-mcp
 Mobile App:      React Native (iOS + Android) — voice-first UX
-Voice:           Whisper API (speech-to-text for voice notes)
+Voice:           MedASR (primary, medical-optimized) → Whisper API (fallback)
 Geolocation:     Google Maps Platform (route optimization, geocoding, distance matrix)
 Storage:         SQLite (local on device) + PostgreSQL (cloud sync)
 Offline:         Service worker + local SQLite — full offline capability with sync queue
+                 MedGemma 4B runs on-device for offline medical lookups
 Messaging:       WhatsApp Business API (optional channel for MR interaction)
 Notifications:   Firebase Cloud Messaging (push notifications)
 Config:          JSON files (product KB, RCPA rules, compliance thresholds, territory config)
+Model Hosting:   Private GPU infra (on-prem) or Vertex AI (cloud) for specialized models
 ```
 
 ### Installation
@@ -924,7 +954,361 @@ async function getCoachingSignals(input: { manager_id: string }) {
 
 ---
 
-## 6. Voice-to-DCR Pipeline
+## 6. Specialized Medical Models (MCP-Wrapped)
+
+### Why Specialized Models
+
+Claude handles orchestration, reasoning, and natural language interaction. But pharma field operations have domain-specific tasks where purpose-built medical models dramatically outperform general-purpose LLMs:
+
+| Task | General LLM Performance | Specialized Model Performance | Why It Matters |
+|------|------------------------|------------------------------|----------------|
+| **Medical speech-to-text** | Whisper: 12.5% WER on medical dictation | MedASR: 5.2% WER (82% fewer errors) | MRs dictate voice notes with drug names, dosages, medical terms. "Carvedilol 6.25mg BID" misheard as "cardiovascular 6.25 bid" breaks the entire DCR pipeline. |
+| **Lab report extraction** | Generic OCR + LLM: ~70% field accuracy | MedGemma 1.5: 90% EHR QA accuracy | When doctors show MRs patient reports to discuss product efficacy, the agent needs to understand lab values, reference ranges, and clinical context. |
+| **Medical document understanding** | Good but not domain-optimized | MedGemma 1.5: trained on CT, MRI, CXR, histopathology, lab reports | Understanding prescription pads, hospital formulary documents, clinical trial reprints shared during doctor interactions. |
+| **Hinglish medical dictation** | Poor — general ASR models struggle with code-mixed medical terminology | Fine-tuned MedASR: domain-adapted for Indian pharma field vocabulary | "Dr. Sharma ko Cardivas ke baare mein bataya, unka HbA1c 7.2 tha" — needs both Hinglish understanding AND medical entity recognition. |
+
+### 6.1 MedGemma 1.5 Integration
+
+[MedGemma 1.5](https://research.google/blog/next-generation-medical-image-interpretation-with-medgemma-15-and-medical-speech-to-text-with-medasr/) is Google's open medical AI model (4B parameters, free for research and commercial use).
+
+**Capabilities used in MR Copilot:**
+
+| Capability | MR Copilot Use Case | How It's Used |
+|------------|-------------------|---------------|
+| **Medical document understanding** | Prescription/lab report reading | Doctor shows a patient's lab report during call → MR photographs it → MedGemma extracts structured data (HbA1c, lipid profile, eGFR) → Agent uses extracted values to suggest relevant products and clinical positioning |
+| **Lab report extraction** | Competitive intelligence from prescriptions | MR photographs competitor prescriptions at chemist (with consent) → MedGemma extracts brand names, dosages, quantities → feeds into RCPA-like competitive analysis |
+| **Clinical document parsing** | Study reprint understanding | When an MR needs to quickly understand a clinical study PDF or a hospital formulary document → MedGemma extracts key findings, endpoints, results |
+| **Longitudinal data review** | Patient outcome tracking | When doctors share serial reports to discuss treatment outcomes → MedGemma compares values across timepoints → Agent generates trend narrative |
+
+**MedGemma MCP Server (`medgemma-mcp`):**
+
+| Tool | Description | Input Schema | Output |
+|------|-------------|-------------|--------|
+| `extract_lab_report` | Extract structured data from lab report image | `{ image_path: string, report_type?: string }` | `{ parameters: LabParameter[], patient_info: PatientInfo, abnormal_flags: string[] }` |
+| `extract_prescription` | Extract prescription details from image | `{ image_path: string }` | `{ drugs: PrescriptionDrug[], doctor_name?: string, diagnosis?: string }` |
+| `parse_clinical_document` | Extract key information from clinical documents | `{ document_path: string, document_type: "study" \| "formulary" \| "guideline" }` | `{ summary: string, key_findings: string[], structured_data: any }` |
+| `compare_serial_reports` | Compare lab values across multiple reports | `{ reports: string[], parameter_focus?: string[] }` | `{ trends: ParameterTrend[], clinical_narrative: string }` |
+
+**Implementation:**
+
+```typescript
+import { z } from "zod";
+
+const ExtractLabReportSchema = z.object({
+  image_path: z.string().describe("Path to lab report image (photo taken by MR)"),
+  report_type: z.enum(["blood_panel", "lipid_profile", "thyroid", "liver", "kidney", "diabetes", "auto"])
+    .default("auto").describe("Type of lab report for optimized extraction"),
+});
+
+async function extractLabReport(input: z.infer<typeof ExtractLabReportSchema>) {
+  // MedGemma 1.5 4B — fine-tuned on Indian lab report formats
+  // (Metropolis, SRL, Dr. Lal PathLab, Thyrocare report layouts)
+  const result = await medgemmaClient.generate({
+    model: "medgemma-1.5-4b-finetuned",  // Company-specific fine-tune
+    image: await loadImage(input.image_path),
+    prompt: `Extract all lab parameters from this report. For each parameter, provide:
+    - Parameter name and code
+    - Value with unit
+    - Reference range
+    - Flag: normal, high, low, critical
+
+    Also extract: patient name, age, sex, sample date, lab name.
+    Return as structured JSON.`,
+  });
+
+  // Post-process: map to standard schema, validate ranges
+  const structured = parseLabReportResponse(result);
+
+  // Feed to Claude for clinical interpretation if abnormals found
+  if (structured.abnormal_flags.length > 0) {
+    const interpretation = await claude.sonnet.generate({
+      prompt: `Given these lab results: ${JSON.stringify(structured.parameters)}
+      Patient: ${structured.patient_info.age}y ${structured.patient_info.sex}
+
+      1. What clinical patterns do you see?
+      2. Which of our products are relevant to these findings?
+      3. What talking points can the MR use with the prescribing doctor?`
+    });
+    structured.clinical_context = interpretation;
+  }
+
+  return structured;
+}
+```
+
+### 6.2 MedASR Integration
+
+MedASR is Google's medical speech-to-text model, purpose-built for healthcare vocabulary — achieving 5.2% word error rate vs Whisper's 12.5% on medical dictation (82% fewer errors).
+
+**Why MedASR over Whisper for MR Copilot:**
+
+| Scenario | Whisper | MedASR | Impact |
+|----------|---------|--------|--------|
+| Drug name: "Carvedilol 6.25mg" | "cardiovascular 6.25 mg" ❌ | "Carvedilol 6.25 mg" ✅ | Correct product identified in DCR |
+| Dosage: "BID with food" | "bit with food" ❌ | "BID with food" ✅ | Correct dosing instruction captured |
+| Study: "COPERNICUS trial" | "Copernicus trial" ⚠️ | "COPERNICUS trial" ✅ | Exact study name for evidence lookup |
+| Hinglish: "HbA1c 7.2 tha" | "hb a1 c 7.2 tha" ❌ | "HbA1c 7.2 tha" ✅ | Lab value correctly parsed |
+| Doctor name: "Dr. Subramaniam" | "Dr. Subramanyam" ⚠️ | "Dr. Subramaniam" ✅ | Correct doctor matched from master list |
+| Medical term: "dyslipidemia" | "dislipidemia" ❌ | "dyslipidemia" ✅ | Correct clinical term for search/matching |
+
+**MedASR MCP Server (`medasr-mcp`):**
+
+| Tool | Description | Input Schema | Output |
+|------|-------------|-------------|--------|
+| `transcribe_medical_audio` | Transcribe voice note with medical vocabulary | `{ audio_url: string, language_hint?: LanguageCode, context?: string }` | `{ text: string, confidence: number, medical_entities: MedicalEntity[], language_detected: string }` |
+| `transcribe_with_diarization` | Transcribe multi-speaker conversation (MR + doctor) | `{ audio_url: string, speakers?: number }` | `{ segments: SpeakerSegment[], medical_entities: MedicalEntity[] }` |
+| `extract_medical_entities` | Extract medical entities from transcribed text | `{ text: string }` | `{ drugs: string[], conditions: string[], lab_values: LabValue[], dosages: Dosage[] }` |
+
+**Implementation:**
+
+```typescript
+const TranscribeMedicalAudioSchema = z.object({
+  audio_url: z.string().describe("URL or path to audio file"),
+  language_hint: z.string().optional().describe("Expected language (hi, ta, mr, etc.)"),
+  context: z.string().optional().describe("Context hint: 'cardiology_call', 'diabetes_discussion'"),
+});
+
+async function transcribeMedicalAudio(input: z.infer<typeof TranscribeMedicalAudioSchema>) {
+  // Primary: MedASR (medical-optimized, 82% fewer errors on medical terms)
+  try {
+    const result = await medasrClient.transcribe({
+      audio: input.audio_url,
+      language: input.language_hint || "auto",
+      domain: "pharmaceutical_field",  // Custom domain hint
+      vocabulary_boost: await getCompanyVocabulary(),  // Company brand names, molecule names
+    });
+
+    // Post-process: extract medical entities for downstream DCR generation
+    const entities = extractMedicalEntities(result.text);
+
+    return {
+      text: result.text,
+      confidence: result.confidence,
+      medical_entities: entities,
+      language_detected: result.language,
+      model: "medasr",
+    };
+  } catch (error) {
+    // Fallback: Whisper API if MedASR unavailable (offline, API down)
+    console.warn("MedASR unavailable, falling back to Whisper:", error.message);
+    const whisperResult = await whisperClient.transcribe({
+      audio: input.audio_url,
+      language: input.language_hint,
+    });
+    return {
+      text: whisperResult.text,
+      confidence: whisperResult.confidence * 0.85,  // Discount confidence for non-medical model
+      medical_entities: [],  // Whisper doesn't extract entities
+      language_detected: whisperResult.language,
+      model: "whisper-fallback",
+    };
+  }
+}
+
+// Company-specific vocabulary boosting
+async function getCompanyVocabulary(): Promise<string[]> {
+  // Loaded from config — all brand names, molecule names, study names
+  // that MedASR should recognize with high confidence
+  return [
+    // Brand names
+    "Cardivas", "Telmivas", "Atorvas", "Gluconorm", "Pantocid",
+    // Molecule names
+    "Carvedilol", "Telmisartan", "Atorvastatin", "Metformin", "Pantoprazole",
+    // Competitor brands
+    "Metolar", "Concor", "Nebicard", "Lipicure", "Atorva",
+    // Study names
+    "COPERNICUS", "COMET", "CAPRICORN", "GEMINI",
+    // Medical terms frequently used in field
+    "HbA1c", "eGFR", "dyslipidemia", "HFrEF", "NYHA",
+    // Common Hinglish medical phrases
+    "BP check", "sugar level", "cholesterol report",
+  ];
+}
+```
+
+### 6.3 Fine-Tuning with Unsloth Studio
+
+General-purpose MedGemma and MedASR are strong baselines. But fine-tuning on **company-specific private data** is what transforms them from good to indispensable. We use [Unsloth Studio](https://unsloth.ai/) for efficient LoRA and reinforcement learning fine-tuning.
+
+**What Gets Fine-Tuned:**
+
+| Model | Fine-Tuning Data Source | What It Learns | Business Impact |
+|-------|------------------------|----------------|-----------------|
+| **MedGemma 1.5 4B** | Company's product formulary, visual aids, clinical data sheets | Recognizes company-specific brand names, formulations, pack sizes in prescription/report images | 40-60% improvement in brand name extraction from prescription photos |
+| **MedGemma 1.5 4B** | Historical RCPA data (prescription patterns by region) | Regional prescribing pattern recognition — knows that "Atorva 10mg" in Mumbai means the Zydus brand, not the molecule | Accurate competitive intelligence from chemist prescription data |
+| **MedGemma 1.5 4B** | Indian lab report formats (Metropolis, SRL, Dr. Lal, Thyrocare templates) | Correctly parses Indian lab report layouts — header positions, parameter naming conventions, reference range formats | >95% extraction accuracy on top 10 Indian lab chains' report formats |
+| **MedASR** | 10,000+ hours of MR voice notes (anonymized, with consent) | Company-specific brand pronunciations, regional accent patterns, Hinglish medical code-mixing, doctor name phonetics | 60-70% reduction in drug name transcription errors vs base MedASR |
+| **MedASR** | Regional language medical dictation corpus | Tamil, Marathi, Bengali, Gujarati medical terminology mixed with English pharma terms | Regional language support with medical vocabulary accuracy |
+
+**Fine-Tuning Pipeline:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    FINE-TUNING PIPELINE (Unsloth Studio)                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  1. DATA COLLECTION            2. PREPARATION              3. TRAIN    │
+│  ┌──────────────────┐         ┌──────────────────┐       ┌──────────┐ │
+│  │ Sources:          │         │ Unsloth Studio:  │       │ Method:  │ │
+│  │ • Product data    │         │                  │       │          │ │
+│  │ • RCPA feeds      │────────>│ • Data cleaning  │──────>│ LoRA     │ │
+│  │ • Voice note      │         │ • Format to      │       │ fine-    │ │
+│  │   transcripts     │         │   instruction    │       │ tuning   │ │
+│  │ • Lab report      │         │   pairs          │       │ (4-bit   │ │
+│  │   scans           │         │ • Train/val      │       │ quant,   │ │
+│  │ • Prescription    │         │   split          │       │ 2× speed │ │
+│  │   photos          │         │ • Quality        │       │ via      │ │
+│  │                   │         │   filtering      │       │ Unsloth) │ │
+│  └──────────────────┘         └──────────────────┘       └────┬─────┘ │
+│                                                                │       │
+│  4. EVALUATE                   5. DEPLOY                       │       │
+│  ┌──────────────────┐         ┌──────────────────┐            │       │
+│  │ Test against:     │         │ Options:         │            │       │
+│  │                   │<────────│                  │<───────────┘       │
+│  │ • Held-out voice  │         │ A. On-prem GPU   │                    │
+│  │   notes           │         │    (L4/A10/A100) │                    │
+│  │ • Known lab       │         │    → Lowest      │                    │
+│  │   reports         │         │    latency,      │                    │
+│  │ • Prescription    │         │    data stays    │                    │
+│  │   photos          │         │    private       │                    │
+│  │                   │         │                  │                    │
+│  │ Metrics:          │         │ B. Vertex AI     │                    │
+│  │ • Drug name WER   │         │    Model Garden  │                    │
+│  │ • Entity F1       │         │    → Managed,    │                    │
+│  │ • Extraction acc. │         │    scalable,     │                    │
+│  │                   │         │    DICOM support │                    │
+│  └──────────────────┘         │                  │                    │
+│                                │ C. Custom API    │                    │
+│                                │    endpoint      │                    │
+│                                │    (vLLM/TGI)    │                    │
+│                                └──────────────────┘                    │
+│                                                                         │
+│  RE-TRAINING CADENCE                                                    │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │ • Monthly: New RCPA data, new voice notes from field             │   │
+│  │ • Quarterly: New product launches, formulary changes             │   │
+│  │ • Ad-hoc: New regional language support, new lab report formats  │   │
+│  │ • Automated: Unsloth Studio pipeline triggered by data threshold │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Unsloth Studio Configuration:**
+
+```python
+# Fine-tuning MedGemma 1.5 4B for Indian pharma lab report extraction
+from unsloth import FastLanguageModel
+
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name="google/medgemma-4b-it",
+    max_seq_length=4096,
+    load_in_4bit=True,        # 4-bit quantization — fits on single L4 GPU
+)
+
+model = FastLanguageModel.get_peft_model(
+    model,
+    r=16,                      # LoRA rank
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                    "gate_proj", "up_proj", "down_proj"],
+    lora_alpha=16,
+    lora_dropout=0,
+    bias="none",
+    use_gradient_checkpointing="unsloth",  # 2× speed, 60% less memory
+)
+
+# Training data: Indian lab report images + structured extraction pairs
+# Format: image → JSON with parameters, values, units, flags
+from datasets import load_dataset
+dataset = load_dataset("company-internal/indian-lab-reports-annotated")
+
+from trl import SFTTrainer
+trainer = SFTTrainer(
+    model=model,
+    tokenizer=tokenizer,
+    train_dataset=dataset["train"],
+    dataset_text_field="text",
+    max_seq_length=4096,
+    args=TrainingArguments(
+        per_device_train_batch_size=2,
+        gradient_accumulation_steps=4,
+        warmup_steps=5,
+        num_train_epochs=3,
+        learning_rate=2e-4,
+        fp16=True,
+        logging_steps=1,
+        output_dir="outputs/medgemma-indian-pharma",
+    ),
+)
+
+trainer.train()
+
+# Export for deployment
+model.save_pretrained_merged("medgemma-indian-pharma-merged", tokenizer)
+# → Deploy to Vertex AI or on-prem vLLM endpoint
+```
+
+### 6.4 Model Orchestration — Who Does What
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    MODEL ORCHESTRATION                                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  INPUT                  SPECIALIZED MODEL              CLAUDE            │
+│  ─────                  ─────────────────              ──────            │
+│                                                                         │
+│  Voice note ──────────> MedASR ──────────────────────> Claude Sonnet    │
+│  (MR dictation)         • Transcribes with             • Extracts DCR   │
+│                           medical vocabulary             structure       │
+│                         • Identifies drug names,        • Generates      │
+│                           dosages, lab values             summary        │
+│                         • Handles Hinglish              • Matches        │
+│                                                           doctor/product │
+│                                                                         │
+│  Lab report photo ────> MedGemma 1.5 ────────────────> Claude Sonnet    │
+│  (doctor shows MR)      • Extracts structured           • Interprets    │
+│                           lab values                      clinically     │
+│                         • Identifies abnormals           • Suggests      │
+│                         • Recognizes Indian lab            product pitch │
+│                           report formats                                 │
+│                                                                         │
+│  Prescription photo ──> MedGemma 1.5 ────────────────> Claude Haiku     │
+│  (RCPA at chemist)      • Extracts brand names,         • Maps to       │
+│                           dosages, quantities              competitor DB │
+│                         • Recognizes doctor               • Updates RCPA │
+│                           handwriting                       analytics    │
+│                                                                         │
+│  Complex analysis ────> (no specialized model) ────────> Claude Opus    │
+│  (RCPA trends,          Claude handles directly:          • Deep         │
+│   coaching signals,     • Multi-step reasoning             reasoning    │
+│   competitive           • Strategy generation             • Pattern     │
+│   strategy)             • Natural language                  recognition  │
+│                                                                         │
+│  RULE: Specialized models handle PERCEPTION (vision, speech).           │
+│        Claude handles REASONING (analysis, strategy, generation).       │
+│        MCP servers provide the clean interface between them.            │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 6.5 Deployment Options for Specialized Models
+
+| Option | Best For | Cost (per MR/month) | Latency | Data Privacy |
+|--------|----------|-------------------|---------|-------------|
+| **On-prem GPU (L4/A10)** | Large pharma (500+ MRs), strict data compliance | ₹200-400 (amortized GPU cost shared across MRs) | <500ms (local network) | Maximum — data never leaves company infra |
+| **Vertex AI Model Garden** | Mid-size pharma, cloud-first teams | ₹300-500 (pay-per-inference) | 500-1000ms (API call) | Google Cloud — data processing agreement required |
+| **Custom vLLM/TGI endpoint** | Flexible deployment, multi-cloud | ₹250-450 (depends on cloud provider) | 500-800ms | Depends on hosting provider |
+| **On-device (MedGemma 4B)** | Offline-first regions (Northeast, rural), zero-latency lookups | ₹0 (runs on MR's device) | <200ms (local) | Maximum — runs entirely on device |
+
+**Hybrid strategy (recommended):**
+- MedASR: Cloud API (needs internet anyway for sync) with Whisper offline fallback
+- MedGemma 4B: On-device for lab report reading (works offline), cloud for heavy document processing
+- Fine-tuned models: On-prem GPU for pharma companies with compliance requirements, Vertex AI for cloud-native companies
+
+---
+
+## 7. Voice-to-DCR Pipeline
 
 The most transformative feature — turning a 30-second voice note into a structured CRM entry:
 
@@ -935,14 +1319,14 @@ The most transformative feature — turning a 30-second voice note into a struct
 │                                                                         │
 │  1. CAPTURE               2. TRANSCRIBE            3. EXTRACT           │
 │  ┌──────────────┐        ┌──────────────────┐     ┌──────────────────┐ │
-│  │ MR records   │        │ Whisper API      │     │ Claude Sonnet    │ │
-│  │ voice note   │        │ transcribes to   │     │ extracts:        │ │
-│  │ after call   │───────>│ text, handles    │────>│                  │ │
-│  │              │        │ Hindi-English     │     │ • Doctor name    │ │
-│  │ "Met Dr.     │        │ code-mixing      │     │ • Products       │ │
-│  │  Shah today, │        │ (Hinglish)       │     │ • Samples given  │ │
-│  │  discussed   │        │                  │     │ • Outcome        │ │
-│  │  Cardivas..."│        │ Confidence: 0.94 │     │ • Commitments    │ │
+│  │ MR records   │        │ MedASR (primary) │     │ Claude Sonnet    │ │
+│  │ voice note   │        │ medical speech-  │     │ extracts:        │ │
+│  │ after call   │───────>│ to-text, 82%     │────>│                  │ │
+│  │              │        │ fewer errors on   │     │ • Doctor name    │ │
+│  │ "Met Dr.     │        │ drug names vs     │     │ • Products       │ │
+│  │  Shah today, │        │ Whisper. Handles  │     │ • Samples given  │ │
+│  │  discussed   │        │ Hinglish medical  │     │ • Outcome        │ │
+│  │  Cardivas..."│        │ Confidence: 0.97  │     │ • Commitments    │ │
 │  └──────────────┘        └──────────────────┘     │ • Next steps     │ │
 │                                                    └────────┬─────────┘ │
 │                                                             │           │
@@ -989,9 +1373,10 @@ async function processVoiceNote(input: {
   lat?: number;
   lng?: number;
 }) {
-  // 1. Transcribe (Whisper handles Hindi-English code-mixing well)
-  const transcription = await tools.transcribe_voice_note({
-    audio_url: input.audio_url
+  // 1. Transcribe using MedASR (82% fewer errors on medical terms vs Whisper)
+  const transcription = await tools.transcribe_medical_audio({
+    audio_url: input.audio_url,
+    context: "pharmaceutical_field_call",
   });
 
   // 2. Get MR's territory context for entity resolution
@@ -1034,7 +1419,7 @@ async function processVoiceNote(input: {
 
 ---
 
-## 7. Orchestrator — Main Agent Loop
+## 8. Orchestrator — Main Agent Loop
 
 ```typescript
 import Anthropic from "@anthropic-ai/sdk";
@@ -1177,7 +1562,7 @@ async function runMRCopilot(userMessage: string, context: MRContext) {
 
 ---
 
-## 8. Scheduled Tasks
+## 9. Scheduled Tasks
 
 ```typescript
 import cron from "node-cron";
@@ -1245,7 +1630,7 @@ cron.schedule("0 9 1 * *", async () => {
 
 ---
 
-## 9. Configuration
+## 10. Configuration
 
 ### Territory Configuration
 
@@ -1415,7 +1800,7 @@ cron.schedule("0 9 1 * *", async () => {
 
 ---
 
-## 10. KPIs & Monitoring
+## 11. KPIs & Monitoring
 
 ### MR-Level KPIs
 
@@ -1445,7 +1830,7 @@ cron.schedule("0 9 1 * *", async () => {
 
 ---
 
-## 11. Cost Estimates (INR)
+## 12. Cost Estimates (INR)
 
 ### Per-MR Monthly Cost
 
@@ -1454,20 +1839,23 @@ cron.schedule("0 9 1 * *", async () => {
 | Claude API — Sonnet (pre-call briefs, DCR generation, objection handling) | ₹800-1,200 | ~30-40 calls/day × 22 days, ~2-3 API calls per call |
 | Claude API — Haiku (product lookups, quick queries) | ₹150-250 | High-volume, low-cost queries |
 | Claude API — Opus (weekly RCPA analysis, coaching signals) | ₹200-400 | 4-5 deep analyses per month |
-| Whisper API (voice transcription) | ₹300-500 | ~8-10 voice notes/day × 22 days, avg 30 sec each |
+| MedASR (medical speech-to-text) | ₹200-350 | Replaces Whisper for medical dictation, 82% fewer errors on drug names |
+| MedGemma 1.5 inference (lab reports, prescriptions) | ₹150-300 | ~2-5 image analyses/day (lab reports, prescription photos at chemist) |
 | Google Maps Platform (routing, geocoding) | ₹200-350 | Daily route optimization + geo-verification |
 | Cloud infrastructure (per-MR share) | ₹100-200 | PostgreSQL, Firebase, hosting |
-| **Total per MR per month** | **₹1,750-2,900** | |
+| **Total per MR per month** | **₹1,800-3,050** | |
 
 ### Company-Level Cost for 100 MRs
 
 | Component | Monthly (₹) | Annual (₹) |
 |-----------|-------------|------------|
-| MR copilot (100 MRs) | ₹1.75L-2.9L | ₹21L-35L |
+| MR copilot (100 MRs) | ₹1.8L-3.05L | ₹21.6L-36.6L |
 | Manager dashboards (10 ABMs) | ₹15K-25K | ₹1.8L-3L |
 | RCPA data processing | ₹10K-20K | ₹1.2L-2.4L |
+| Specialized model hosting (MedGemma + MedASR) | ₹40K-80K | ₹4.8L-9.6L (shared GPU infra or Vertex AI) |
+| Fine-tuning (Unsloth Studio, quarterly) | ₹15K-30K | ₹1.8L-3.6L (GPU compute for retraining) |
 | Infrastructure | ₹30K-50K | ₹3.6L-6L |
-| **Total** | **₹2.3L-3.9L** | **₹27.6L-46.4L** |
+| **Total** | **₹2.9L-4.85L** | **₹34.8L-58.2L** |
 
 ### ROI Justification
 
@@ -1477,11 +1865,12 @@ cron.schedule("0 9 1 * *", async () => {
 | Extra productive call per day | 1 call × 22 days × 100 MRs × ₹200 avg Rx value | ₹4.4L/month in incremental Rx |
 | Reduced MR attrition (better tools) | 5% lower attrition × ₹3L replacement cost | ₹15L/year saved |
 | Improved coverage → Rx growth | 2% share gain on ₹50Cr territory | ₹1Cr/year incremental revenue |
-| **Total annual benefit** | **₹1.5-2Cr** | **vs cost of ₹28-46L = 3-5× ROI** |
+| Improved accuracy from specialized models | Better drug name recognition → fewer DCR errors, better RCPA from prescription photos | Saves ₹2-3L/year in data correction + MR rework |
+| **Total annual benefit** | **₹1.5-2Cr** | **vs cost of ₹35-58L = 2.5-4× ROI** |
 
 ---
 
-## 12. Deployment & Rollout
+## 13. Deployment & Rollout
 
 ### Phased Rollout
 
@@ -1565,7 +1954,7 @@ cron.schedule("0 9 1 * *", async () => {
 
 ---
 
-## 13. Security & Privacy
+## 14. Security & Privacy
 
 | Concern | Mitigation |
 |---------|-----------|
@@ -1580,7 +1969,7 @@ cron.schedule("0 9 1 * *", async () => {
 
 ---
 
-## 14. Example Conversations
+## 15. Example Conversations
 
 ### Pre-Call Brief Request
 
@@ -1671,7 +2060,7 @@ use case positioning with your ABM — could be a team-wide messaging opportunit
 
 ---
 
-## 15. Regional & Language Intelligence
+## 16. Regional & Language Intelligence
 
 Indian pharma is fundamentally regional. An MR in Chennai operates in an entirely different linguistic, cultural, and medical ecosystem than one in Lucknow. This isn't a "nice to have" localization layer — it's a core differentiator that determines adoption.
 
