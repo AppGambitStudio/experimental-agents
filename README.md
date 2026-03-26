@@ -7,6 +7,7 @@ Research documents and specifications for building production-grade AI agents us
 | Document | Description |
 |----------|-------------|
 | [Deep Agent Infrastructure Playbook](deep-agent-infrastructure-playbook.md) | Comprehensive guide covering shared infrastructure patterns, architectural decisions, and implementation techniques for building deep agents. Covers tool design, MCP integration, orchestration, error handling, and deployment. |
+| [Agent Framework Implementation Playbook](agent-framework-implementation-playbook.md) | Technical guide for implementing agents across 5 frameworks — Claude Agent SDK, LangChain/LangGraph, CrewAI, Mastra, and AWS Bedrock AgentCore. Includes framework selection matrix, reference implementations, hosting patterns (Docker/ECS/Fargate/Serverless), and migration guides. |
 
 ## Agent Specs
 
