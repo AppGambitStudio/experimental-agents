@@ -703,7 +703,8 @@ CREATE INDEX idx_diffs_versions ON version_diffs(from_version_id, to_version_id)
 ## 7. Orchestrator — Main Agent
 
 ```typescript
-import Anthropic from "@anthropic-ai/sdk";
+import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 
 const SYSTEM_PROMPT = `You are a Legal Contract Intelligence Agent specializing in Indian law.
 You help business teams (non-lawyers) understand contracts, identify legal risks, and negotiate better terms.
@@ -750,6 +751,205 @@ LANGUAGE:
 - Understand contracts in Hindi, Marathi, Gujarati, Tamil (via Sarvam AI OCR).
 - Risk explanations should be in simple business English, not legalese.`;
 
+// ── Document MCP Server tools ──────────────────────────────────────
+
+const parseDocumentTool = tool(
+  "parse_document",
+  "Extract clean text from PDF/DOCX contract document",
+  { file_path: z.string(), language_hint: z.string().optional() },
+  async ({ file_path, language_hint }) => {
+    const result = await parseDocumentImpl(file_path, language_hint);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const parseRegionalDocumentTool = tool(
+  "parse_regional_document",
+  "OCR + extract from scanned regional language doc via Sarvam AI",
+  { file_path: z.string(), source_language: z.string() },
+  async ({ file_path, source_language }) => {
+    const result = await parseRegionalDocumentImpl(file_path, source_language);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const extractMetadataTool = tool(
+  "extract_metadata",
+  "Extract document metadata (dates, parties, title)",
+  { text: z.string() },
+  async ({ text }) => {
+    const result = await extractMetadataImpl(text);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const documentMcpServer = createSdkMcpServer({
+  name: "document-mcp",
+  tools: [parseDocumentTool, parseRegionalDocumentTool, extractMetadataTool],
+});
+
+// ── Legal KB MCP Server tools ──────────────────────────────────────
+
+const searchStatutesTool = tool(
+  "search_statutes",
+  "Vector + keyword search for relevant Indian law provisions",
+  { query: z.string(), acts: z.array(z.string()).optional(), tags: z.array(z.string()).optional() },
+  async ({ query, acts, tags }) => {
+    const result = await searchStatutesImpl(query, acts, tags);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const searchClausePatternsTool = tool(
+  "search_clause_patterns",
+  "Find matching risky clause patterns from the Legal KB",
+  { clause_text: z.string(), contract_type: z.string() },
+  async ({ clause_text, contract_type }) => {
+    const result = await searchClausePatternsImpl(clause_text, contract_type);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const searchPrecedentsTool = tool(
+  "search_precedents",
+  "Find relevant judicial precedents from Indian courts",
+  { query: z.string(), statute_section: z.string().optional() },
+  async ({ query, statute_section }) => {
+    const result = await searchPrecedentsImpl(query, statute_section);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const getRequiredClausesTool = tool(
+  "get_required_clauses",
+  "Get list of clauses that SHOULD exist for a contract type",
+  { contract_type: z.string(), conditions: z.array(z.string()).optional() },
+  async ({ contract_type, conditions }) => {
+    const result = await getRequiredClausesImpl(contract_type, conditions);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const getStampDutyTool = tool(
+  "get_stamp_duty",
+  "Calculate stamp duty for document type and state",
+  { state: z.string(), document_type: z.string(), contract_value: z.number().optional() },
+  async ({ state, document_type, contract_value }) => {
+    const result = await getStampDutyImpl(state, document_type, contract_value);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const checkEnforceabilityTool = tool(
+  "check_enforceability",
+  "Check if a specific clause type is enforceable under Indian law",
+  { clause_type: z.string(), clause_text: z.string() },
+  async ({ clause_type, clause_text }) => {
+    const result = await checkEnforceabilityImpl(clause_type, clause_text);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const legalKbMcpServer = createSdkMcpServer({
+  name: "legal-kb-mcp",
+  tools: [
+    searchStatutesTool, searchClausePatternsTool, searchPrecedentsTool,
+    getRequiredClausesTool, getStampDutyTool, checkEnforceabilityTool,
+  ],
+});
+
+// ── Contract Repo MCP Server tools ─────────────────────────────────
+
+const createContractTool = tool(
+  "create_contract",
+  "Register a new contract for review",
+  { title: z.string(), counterparty: z.string(), contract_type: z.string(), our_role: z.string() },
+  async ({ title, counterparty, contract_type, our_role }) => {
+    const result = await createContractImpl(title, counterparty, contract_type, our_role);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const addVersionTool = tool(
+  "add_version",
+  "Add a new version of the contract",
+  { contract_id: z.string(), document_path: z.string(), document_text: z.string(), label: z.string() },
+  async ({ contract_id, document_path, document_text, label }) => {
+    const result = await addVersionImpl(contract_id, document_path, document_text, label);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const storeAnalysisTool = tool(
+  "store_analysis",
+  "Store analysis results for a contract version",
+  { version_id: z.string(), analysis: z.any() },
+  async ({ version_id, analysis }) => {
+    const result = await storeAnalysisImpl(version_id, analysis);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const storeClauseAnalysisTool = tool(
+  "store_clause_analysis",
+  "Store individual clause analysis",
+  { analysis_id: z.string(), clause: z.any() },
+  async ({ analysis_id, clause }) => {
+    const result = await storeClauseAnalysisImpl(analysis_id, clause);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const getPreviousAnalysisTool = tool(
+  "get_previous_analysis",
+  "Get analysis from previous version for comparison",
+  { contract_id: z.string(), version_number: z.number() },
+  async ({ contract_id, version_number }) => {
+    const result = await getPreviousAnalysisImpl(contract_id, version_number);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const generateVersionDiffTool = tool(
+  "generate_version_diff",
+  "Compare two version analyses and generate diff",
+  { from_version_id: z.string(), to_version_id: z.string() },
+  async ({ from_version_id, to_version_id }) => {
+    const result = await generateVersionDiffImpl(from_version_id, to_version_id);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const searchContractsTool = tool(
+  "search_contracts",
+  "Search contract repository",
+  { query: z.string().optional(), contract_type: z.string().optional(), status: z.string().optional(), counterparty: z.string().optional() },
+  async ({ query: q, contract_type, status, counterparty }) => {
+    const result = await searchContractsImpl(q, contract_type, status, counterparty);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const getContractTimelineTool = tool(
+  "get_contract_timeline",
+  "Get all versions and analyses for a contract",
+  { contract_id: z.string() },
+  async ({ contract_id }) => {
+    const result = await getContractTimelineImpl(contract_id);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const contractMcpServer = createSdkMcpServer({
+  name: "contract-mcp",
+  tools: [
+    createContractTool, addVersionTool, storeAnalysisTool, storeClauseAnalysisTool,
+    getPreviousAnalysisTool, generateVersionDiffTool, searchContractsTool, getContractTimelineTool,
+  ],
+});
+
+// ── Main orchestrator ──────────────────────────────────────────────
+
 async function analyzeContract(
   contractFile: string,
   contractType: string,
@@ -758,30 +958,10 @@ async function analyzeContract(
   state: string,
   autonomyLevel: 1 | 2 | 3,
 ) {
-  const tools = [
-    // Document tools
-    { name: "parse_document", ...parseDocumentSchema },
-    { name: "parse_regional_document", ...parseRegionalDocumentSchema },
-    { name: "extract_metadata", ...extractMetadataSchema },
-
-    // Legal KB tools
-    { name: "search_statutes", ...searchStatutesSchema },
-    { name: "search_clause_patterns", ...searchClausePatternsSchema },
-    { name: "search_precedents", ...searchPrecedentsSchema },
-    { name: "get_required_clauses", ...getRequiredClausesSchema },
-    { name: "get_stamp_duty", ...getStampDutySchema },
-    { name: "check_enforceability", ...checkEnforceabilitySchema },
-
-    // Contract repo tools
-    { name: "create_contract", ...createContractSchema },
-    { name: "add_version", ...addVersionSchema },
-    { name: "store_analysis", ...storeAnalysisSchema },
-    { name: "store_clause_analysis", ...storeClauseAnalysisSchema },
-    { name: "get_previous_analysis", ...getPreviousAnalysisSchema },
-    { name: "generate_version_diff", ...generateVersionDiffSchema },
-    { name: "search_contracts", ...searchContractsSchema },
-    { name: "get_contract_timeline", ...getContractTimelineSchema },
-  ];
+  // Escalate to Opus for L2+ autonomy (cross-clause reasoning, negotiation strategy)
+  const model = autonomyLevel >= 2
+    ? "claude-opus-4-6-20250514"
+    : "claude-sonnet-4-6-20250514";
 
   const userPrompt = `Analyze this contract:
   - File: ${contractFile}
@@ -803,48 +983,28 @@ async function analyzeContract(
   ${autonomyLevel >= 2 ? "Also generate: redlined version and negotiation playbook." : ""}
   ${autonomyLevel >= 2 ? "If this is v2+, generate a version diff against the previous analysis." : ""}`;
 
-  const messages = [{ role: "user" as const, content: userPrompt }];
+  let finalResult = "";
 
-  let response = await client.messages.create({
-    model: "claude-sonnet-4-6-20250514",
-    max_tokens: 8192,
-    system: SYSTEM_PROMPT,
-    tools,
-    messages,
-  });
-
-  // Agentic loop
-  while (response.stop_reason === "tool_use") {
-    const toolUseBlocks = response.content.filter(b => b.type === "tool_use");
-    const toolResults = await Promise.all(
-      toolUseBlocks.map(async (toolUse) => {
-        const result = await executeTool(toolUse.name, toolUse.input);
-        return {
-          type: "tool_result" as const,
-          tool_use_id: toolUse.id,
-          content: JSON.stringify(result),
-        };
-      })
-    );
-
-    messages.push({ role: "assistant", content: response.content });
-    messages.push({ role: "user", content: toolResults });
-
-    // Escalate to Opus for cross-clause reasoning and negotiation strategy
-    const needsOpus = toolUseBlocks.some(t =>
-      ["generate_version_diff", "check_enforceability"].includes(t.name)
-    ) || autonomyLevel >= 2;
-
-    response = await client.messages.create({
-      model: needsOpus ? "claude-opus-4-6-20250514" : "claude-sonnet-4-6-20250514",
-      max_tokens: 8192,
-      system: SYSTEM_PROMPT,
-      tools,
-      messages,
-    });
+  // query() handles the agentic loop internally — no manual while loop needed
+  for await (const message of query({
+    prompt: userPrompt,
+    options: {
+      model,
+      systemPrompt: SYSTEM_PROMPT,
+      mcpServers: {
+        "document-mcp": documentMcpServer,
+        "legal-kb-mcp": legalKbMcpServer,
+        "contract-mcp": contractMcpServer,
+      },
+      maxTurns: 50,
+    },
+  })) {
+    if ("result" in message) {
+      finalResult = message.result;
+    }
   }
 
-  return response.content.filter(b => b.type === "text").map(b => b.text).join("\n");
+  return finalResult;
 }
 ```
 

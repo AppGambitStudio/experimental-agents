@@ -82,7 +82,7 @@ The Claude Agent SDK is Anthropic's official framework for building agents with 
 - **MCP-native:** MCP servers are the primary mechanism for tool integration, not an afterthought
 - **In-process MCP servers:** Run MCP servers in the same process as your agent (no IPC overhead for local tools)
 - **Lifecycle hooks:** Intercept tool calls before and after execution for guardrails, logging, cost tracking
-- **Minimal abstractions:** No graph DSL, no role system — you write the orchestration logic
+- **Minimal abstractions:** No graph DSL, no role system — `query()` handles the agentic loop, you write everything else
 - **Model tiering:** Easy to route different tasks to Opus/Sonnet/Haiku based on complexity
 
 **Current version:** v0.1.48 (TypeScript), v0.1.x (Python)
@@ -136,78 +136,13 @@ This Research Agent takes a research topic, searches the web for sources, reads 
 ```typescript
 // research-agent-claude-sdk.ts
 // Claude Agent SDK v0.1.48
-// npm install @anthropic-ai/sdk zod
+// npm install @anthropic-ai/claude-agent-sdk zod
 
-import Anthropic from "@anthropic-ai/sdk";
+import { query, tool, createSdkMcpServer, HookCallback } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
 // ============================================================
-// Tool Definitions
-// ============================================================
-
-const tools: Anthropic.Messages.Tool[] = [
-  {
-    name: "web_search",
-    description:
-      "Search the web for information on a topic. Returns a list of results with titles, URLs, and snippets. Use this to find relevant sources for research.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        query: {
-          type: "string",
-          description: "The search query",
-        },
-        max_results: {
-          type: "number",
-          description: "Maximum number of results to return (default 10)",
-        },
-      },
-      required: ["query"],
-    },
-  },
-  {
-    name: "read_document",
-    description:
-      "Fetch and read the content of a URL or document. Returns the text content. Use this to read articles, papers, or web pages found via web_search.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        url: {
-          type: "string",
-          description: "The URL to fetch and read",
-        },
-      },
-      required: ["url"],
-    },
-  },
-  {
-    name: "write_report",
-    description:
-      "Save the final research report to a file. Use this after you have gathered and analyzed all sources. The report should be comprehensive and well-structured.",
-    input_schema: {
-      type: "object" as const,
-      properties: {
-        title: {
-          type: "string",
-          description: "Report title",
-        },
-        content: {
-          type: "string",
-          description: "Full report content in Markdown format",
-        },
-        sources: {
-          type: "array",
-          items: { type: "string" },
-          description: "List of source URLs used in the report",
-        },
-      },
-      required: ["title", "content", "sources"],
-    },
-  },
-];
-
-// ============================================================
-// Tool Execution
+// Tool Definitions (using tool() with Zod schemas)
 // ============================================================
 
 interface SearchResult {
@@ -216,118 +151,127 @@ interface SearchResult {
   snippet: string;
 }
 
-async function executeWebSearch(
-  query: string,
-  maxResults: number = 10,
-): Promise<{ results: SearchResult[]; count: number }> {
-  // In production: integrate with Brave Search API, Serper, or Tavily
-  // This is the integration point — swap the implementation, keep the interface
-  const response = await fetch(
-    `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${maxResults}`,
-    {
-      headers: { "X-Subscription-Token": process.env.BRAVE_SEARCH_API_KEY! },
-    },
-  );
-  const data = await response.json();
-  const results = (data.web?.results || []).map(
-    (r: { title: string; url: string; description: string }) => ({
-      title: r.title,
-      url: r.url,
-      snippet: r.description,
-    }),
-  );
-  return { results, count: results.length };
-}
+const webSearchTool = tool(
+  "web_search",
+  "Search the web for information on a topic. Returns a list of results with titles, URLs, and snippets. Use this to find relevant sources for research.",
+  {
+    query: z.string().describe("The search query"),
+    max_results: z.number().optional().describe("Maximum number of results to return (default 10)"),
+  },
+  async ({ query: searchQuery, max_results }) => {
+    // In production: integrate with Brave Search API, Serper, or Tavily
+    // This is the integration point — swap the implementation, keep the interface
+    const maxResults = max_results ?? 10;
+    const response = await fetch(
+      `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(searchQuery)}&count=${maxResults}`,
+      {
+        headers: { "X-Subscription-Token": process.env.BRAVE_SEARCH_API_KEY! },
+      },
+    );
+    const data = await response.json();
+    const results: SearchResult[] = (data.web?.results || []).map(
+      (r: { title: string; url: string; description: string }) => ({
+        title: r.title,
+        url: r.url,
+        snippet: r.description,
+      }),
+    );
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify({ results, count: results.length }) }],
+    };
+  },
+  { annotations: { readOnlyHint: true, openWorldHint: true } }
+);
 
-async function executeReadDocument(
-  url: string,
-): Promise<{ content: string; word_count: number }> {
-  // In production: use a proper scraping service or Jina Reader API
-  const response = await fetch(`https://r.jina.ai/${url}`, {
-    headers: { Accept: "text/plain" },
-  });
-  const content = await response.text();
-  return { content: content.slice(0, 50000), word_count: content.split(/\s+/).length };
-}
+const readDocumentTool = tool(
+  "read_document",
+  "Fetch and read the content of a URL or document. Returns the text content. Use this to read articles, papers, or web pages found via web_search.",
+  {
+    url: z.string().describe("The URL to fetch and read"),
+  },
+  async ({ url }) => {
+    // In production: use a proper scraping service or Jina Reader API
+    const response = await fetch(`https://r.jina.ai/${url}`, {
+      headers: { Accept: "text/plain" },
+    });
+    const content = await response.text();
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify({
+        content: content.slice(0, 50000),
+        word_count: content.split(/\s+/).length,
+      }) }],
+    };
+  },
+  { annotations: { readOnlyHint: true, openWorldHint: true } }
+);
 
-async function executeWriteReport(
-  title: string,
-  content: string,
-  sources: string[],
-): Promise<{ file_path: string; status: string }> {
-  const fs = await import("fs/promises");
-  const filename = `report-${title.toLowerCase().replace(/\s+/g, "-").slice(0, 50)}.md`;
-  const fullContent = `# ${title}\n\n${content}\n\n---\n\n## Sources\n\n${sources.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n`;
-  await fs.writeFile(filename, fullContent, "utf-8");
-  return { file_path: filename, status: "saved" };
-}
-
-async function executeTool(
-  name: string,
-  input: Record<string, unknown>,
-): Promise<unknown> {
-  switch (name) {
-    case "web_search":
-      return executeWebSearch(
-        input.query as string,
-        (input.max_results as number) || 10,
-      );
-    case "read_document":
-      return executeReadDocument(input.url as string);
-    case "write_report":
-      return executeWriteReport(
-        input.title as string,
-        input.content as string,
-        input.sources as string[],
-      );
-    default:
-      return { error: `Unknown tool: ${name}` };
+const writeReportTool = tool(
+  "write_report",
+  "Save the final research report to a file. Use this after you have gathered and analyzed all sources. The report should be comprehensive and well-structured.",
+  {
+    title: z.string().describe("Report title"),
+    content: z.string().describe("Full report content in Markdown format"),
+    sources: z.array(z.string()).describe("List of source URLs used in the report"),
+  },
+  async ({ title, content, sources }) => {
+    const fs = await import("fs/promises");
+    const filename = `report-${title.toLowerCase().replace(/\s+/g, "-").slice(0, 50)}.md`;
+    const fullContent = `# ${title}\n\n${content}\n\n---\n\n## Sources\n\n${sources.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n`;
+    await fs.writeFile(filename, fullContent, "utf-8");
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify({ file_path: filename, status: "saved" }) }],
+    };
   }
-}
+);
+
+// ============================================================
+// In-Process MCP Server (bundles tools into an MCP server)
+// ============================================================
+
+const researchMcp = createSdkMcpServer({
+  name: "research-tools",
+  tools: [webSearchTool, readDocumentTool, writeReportTool],
+});
 
 // ============================================================
 // Lifecycle Hooks (Guardrails + Observability)
 // ============================================================
 
-function preToolUse(
-  toolName: string,
-  toolInput: Record<string, unknown>,
-): { allow: boolean; reason?: string } {
-  // Example guardrail: block write_report if no sources
-  if (toolName === "write_report") {
-    const sources = toolInput.sources as string[];
+// Guardrail: block write_report if no sources provided
+const sourceGuardHook: HookCallback = async (input) => {
+  const toolInput = input as { tool_name: string; tool_input: Record<string, unknown> };
+  if (toolInput.tool_name === "write_report") {
+    const sources = toolInput.tool_input.sources as string[];
     if (!sources || sources.length === 0) {
-      return { allow: false, reason: "Cannot write report with no sources" };
+      return { decision: "block", reason: "Cannot write report with no sources" };
     }
   }
+  return {};
+};
 
-  // Example guardrail: limit read_document to trusted domains in production
-  // if (toolName === "read_document") {
-  //   const url = toolInput.url as string;
-  //   if (!ALLOWED_DOMAINS.some(d => url.includes(d))) {
-  //     return { allow: false, reason: `Domain not in allowlist: ${url}` };
-  //   }
-  // }
-
-  console.log(`[PreToolUse] ${toolName}`, JSON.stringify(toolInput).slice(0, 200));
-  return { allow: true };
-}
-
-function postToolUse(
-  toolName: string,
-  _toolInput: Record<string, unknown>,
-  result: unknown,
-  durationMs: number,
-): void {
+// Observability: log all tool calls
+const auditHook: HookCallback = async (input) => {
+  const toolInput = input as { tool_name: string; tool_input: Record<string, unknown> };
   console.log(
-    `[PostToolUse] ${toolName} completed in ${durationMs}ms`,
+    `[PreToolUse] ${toolInput.tool_name}`,
+    JSON.stringify(toolInput.tool_input).slice(0, 200),
+  );
+  return {};
+};
+
+// Post-execution logging
+const postToolHook: HookCallback = async (input) => {
+  const toolOutput = input as { tool_name: string; duration_ms: number };
+  console.log(
+    `[PostToolUse] ${toolOutput.tool_name} completed in ${toolOutput.duration_ms}ms`,
   );
   // In production: emit metrics to CloudWatch/Datadog
-  // metrics.trackToolCall(toolName, durationMs, result.status);
-}
+  // metrics.trackToolCall(toolOutput.tool_name, toolOutput.duration_ms);
+  return {};
+};
 
 // ============================================================
-// Main Agent Loop
+// System Prompt
 // ============================================================
 
 const SYSTEM_PROMPT = `You are a Research Agent. Your job is to research a given topic thoroughly and produce a well-structured report.
@@ -352,109 +296,39 @@ RULES:
 - Focus on recent information (prefer sources from the last 12 months)
 - The report should be 800-1500 words`;
 
+// ============================================================
+// Main Agent (using query() async generator)
+// ============================================================
+
 async function runResearchAgent(topic: string): Promise<string> {
-  const client = new Anthropic();
+  let finalText = "";
 
-  const messages: Anthropic.Messages.MessageParam[] = [
-    {
-      role: "user",
-      content: `Research the following topic and produce a comprehensive report:\n\n${topic}`,
-    },
-  ];
-
-  let response = await client.messages.create({
-    model: "claude-sonnet-4-6-20250514",
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    tools,
-    messages,
-  });
-
-  let totalTokens = {
-    input: response.usage.input_tokens,
-    output: response.usage.output_tokens,
-  };
-  let toolCallCount = 0;
-
-  // Agentic loop — keep going until the model stops calling tools
-  while (response.stop_reason === "tool_use") {
-    const toolUseBlocks = response.content.filter(
-      (b): b is Anthropic.Messages.ToolUseBlock => b.type === "tool_use",
-    );
-
-    const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
-
-    for (const toolUse of toolUseBlocks) {
-      const input = toolUse.input as Record<string, unknown>;
-
-      // PreToolUse hook
-      const preCheck = preToolUse(toolUse.name, input);
-      if (!preCheck.allow) {
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: toolUse.id,
-          content: JSON.stringify({
-            error: `Tool call blocked: ${preCheck.reason}`,
-          }),
-        });
-        continue;
-      }
-
-      // Execute tool
-      const startTime = Date.now();
-      try {
-        const result = await executeTool(toolUse.name, input);
-        const duration = Date.now() - startTime;
-
-        // PostToolUse hook
-        postToolUse(toolUse.name, input, result, duration);
-
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: toolUse.id,
-          content: JSON.stringify(result),
-        });
-        toolCallCount++;
-      } catch (err) {
-        const duration = Date.now() - startTime;
-        postToolUse(toolUse.name, input, { error: String(err) }, duration);
-
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: toolUse.id,
-          content: JSON.stringify({
-            error: `Tool execution failed: ${String(err)}`,
-            suggestion: "Try a different approach or skip this source",
-          }),
-          is_error: true,
-        });
-      }
-    }
-
-    // Append assistant response and tool results to conversation
-    messages.push({ role: "assistant", content: response.content });
-    messages.push({ role: "user", content: toolResults });
-
-    // Continue the loop
-    response = await client.messages.create({
+  // query() handles the entire agentic loop internally —
+  // no manual while loop, no message array management, no tool dispatch
+  for await (const message of query({
+    prompt: `Research the following topic and produce a comprehensive report:\n\n${topic}`,
+    options: {
+      systemPrompt: SYSTEM_PROMPT,
       model: "claude-sonnet-4-6-20250514",
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
-      tools,
-      messages,
-    });
-
-    totalTokens.input += response.usage.input_tokens;
-    totalTokens.output += response.usage.output_tokens;
+      maxTokens: 4096,
+      mcpServers: { "research-tools": researchMcp },
+      permissionMode: "bypassPermissions",
+      maxTurns: 30,
+      hooks: {
+        PreToolUse: [
+          { matcher: "write_report", hooks: [sourceGuardHook] },
+          { matcher: ".*", hooks: [auditHook] },
+        ],
+        PostToolUse: [
+          { matcher: ".*", hooks: [postToolHook] },
+        ],
+      },
+    },
+  })) {
+    if ("result" in message) {
+      finalText = message.result;
+    }
   }
-
-  // Extract final text response
-  const finalText = response.content
-    .filter((b): b is Anthropic.Messages.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n");
-
-  console.log(`\n[Agent Complete] Tool calls: ${toolCallCount} | Tokens: ${totalTokens.input} in / ${totalTokens.output} out`);
 
   return finalText;
 }
@@ -479,49 +353,61 @@ The [Legal/Contract Intelligence Agent spec](./legal-contract-intelligence-agent
 
 | Agent Spec Component | Claude Agent SDK Primitive | Implementation |
 |---------------------|---------------------------|----------------|
-| Orchestrator | Agentic loop (`while stop_reason === "tool_use"`) | The main `analyzeContract()` function runs the loop |
-| 3 MCP Servers | MCP server connections (stdio/in-process) | `document-mcp`, `legal-kb-mcp`, `contract-mcp` |
-| 16 tools across servers | `tools` array in `messages.create()` | Each MCP server exposes 3-7 tools |
-| Model tiering (Opus/Sonnet/Haiku) | Conditional `model` parameter per iteration | Opus for cross-clause reasoning, Sonnet for analysis, Haiku for lookups |
-| Guardrails (never provide legal advice) | System prompt + PreToolUse hooks | Block store_analysis if disclaimer missing |
-| Tiered autonomy (L1/L2/L3) | Conditional tool availability per user config | L1: read-only tools only. L2: adds write/redline tools. L3: adds monitoring tools |
+| Orchestrator | `query()` async generator (handles the agentic loop internally) | The main `analyzeContract()` function iterates `query()` |
+| 3 MCP Servers | `mcpServers` option (in-process via `createSdkMcpServer`, stdio, HTTP) | `document-mcp`, `legal-kb-mcp`, `contract-mcp` |
+| 16 tools across servers | `tool()` definitions bundled into MCP servers | Each MCP server exposes 3-7 tools via `createSdkMcpServer()` |
+| Model tiering (Opus/Sonnet/Haiku) | `model` option in `query()` + subagent `agents` config | Opus for cross-clause reasoning, Sonnet for analysis, Haiku for lookups |
+| Guardrails (never provide legal advice) | System prompt + `hooks.PreToolUse` with `HookCallback` | Block store_analysis if disclaimer missing |
+| Tiered autonomy (L1/L2/L3) | Conditional MCP server/tool availability per user config | L1: read-only tools only. L2: adds write/redline tools. L3: adds monitoring tools |
 
-**Key pattern from the spec** — model escalation within the agentic loop:
+**Key pattern from the spec** — model escalation via subagents:
 
 ```typescript
 // From legal-contract-intelligence-agent-spec.md, Section 7
-// The agent starts with Sonnet for document reading and clause analysis.
-// When it hits cross-clause reasoning or negotiation strategy, it escalates to Opus.
+// The main agent runs on Sonnet for document reading and clause analysis.
+// Complex tasks (cross-clause reasoning, negotiation strategy) are delegated
+// to an Opus subagent via the agents config.
 
-const needsOpus = toolUseBlocks.some(t =>
-  ["generate_version_diff", "check_enforceability"].includes(t.name)
-) || autonomyLevel >= 2;
+const opusAnalysisAgent = {
+  name: "deep-analysis",
+  model: "claude-opus-4-6-20250514",
+  systemPrompt: "You are a legal analysis specialist...",
+  mcpServers: { "legal-kb": legalKbMcp },
+};
 
-response = await client.messages.create({
-  model: needsOpus ? "claude-opus-4-6-20250514" : "claude-sonnet-4-6-20250514",
-  max_tokens: 8192,
-  system: SYSTEM_PROMPT,
-  tools,
-  messages,
-});
+for await (const message of query({
+  prompt: "Analyze this contract...",
+  options: {
+    model: "claude-sonnet-4-6-20250514",
+    systemPrompt: SYSTEM_PROMPT,
+    mcpServers: { "document": documentMcp, "contract": contractMcp },
+    maxTokens: 8192,
+    agents: {
+      "deep-analysis": opusAnalysisAgent,
+    },
+    hooks: {
+      PreToolUse: [
+        { matcher: "store_analysis", hooks: [disclaimerGuardHook] },
+      ],
+    },
+  },
+})) {
+  if ("result" in message) console.log(message.result);
+}
 ```
 
-This pattern — routing to a more capable (and expensive) model mid-loop based on what the agent is doing — is natural in the Claude Agent SDK because you control the loop. In LangGraph, you'd implement this as conditional routing between nodes. In CrewAI, you'd assign different models to different agents.
+This pattern — routing to a more capable (and expensive) model for specific tasks — is natural in the Claude Agent SDK via subagent delegation. The SDK's `agents` config lets the primary agent hand off to a specialist agent with a different model. In LangGraph, you'd implement this as conditional routing between nodes. In CrewAI, you'd assign different models to different agents.
 
 ### MCP Server Integration Patterns
 
 **Pattern 1: In-process MCP server (lowest latency, same process)**
 
 ```typescript
-import { McpServer } from "@anthropic-ai/sdk/mcp";
+import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 
-// Define an in-process MCP server for custom business logic
-const legalKbServer = new McpServer({
-  name: "legal-kb",
-  version: "1.0.0",
-});
-
-legalKbServer.tool(
+// Define tools using tool() with Zod schemas
+const searchStatutesTool = tool(
   "search_statutes",
   "Search Indian legal statutes by semantic similarity",
   {
@@ -552,37 +438,69 @@ legalKbServer.tool(
       ],
     };
   },
+  { annotations: { readOnlyHint: true } }
 );
+
+// Bundle tools into an in-process MCP server
+const legalKbMcp = createSdkMcpServer({
+  name: "legal-kb",
+  tools: [searchStatutesTool, /* ...other tools */],
+});
+
+// Use in query()
+for await (const message of query({
+  prompt: "Search for precedents on...",
+  options: {
+    mcpServers: { "legal-kb": legalKbMcp },
+    // ...
+  },
+})) { /* ... */ }
 ```
 
 **Pattern 2: stdio MCP server (separate process, standard protocol)**
 
 ```typescript
-// Connect to an external MCP server running as a separate process
-import { StdioClientTransport } from "@anthropic-ai/sdk/mcp";
-
-const documentMcp = new StdioClientTransport({
-  command: "node",
-  args: ["./mcp-servers/document-mcp/index.js"],
-  env: {
-    DOCPROOF_API_KEY: process.env.DOCPROOF_API_KEY!,
-    SARVAM_API_KEY: process.env.SARVAM_API_KEY!,
+// Connect to an external MCP server running as a separate process.
+// Pass stdio server configs directly to the mcpServers option in query().
+for await (const message of query({
+  prompt: "Analyze this document...",
+  options: {
+    mcpServers: {
+      "document-mcp": {
+        type: "stdio",
+        command: "node",
+        args: ["./mcp-servers/document-mcp/index.js"],
+        env: {
+          DOCPROOF_API_KEY: process.env.DOCPROOF_API_KEY!,
+          SARVAM_API_KEY: process.env.SARVAM_API_KEY!,
+        },
+      },
+    },
+    // ...
   },
-});
+})) { /* ... */ }
 ```
 
 **Pattern 3: HTTP remote MCP server (shared service, multi-tenant)**
 
 ```typescript
-// Connect to a remote MCP server over HTTP (e.g., shared Legal KB service)
-import { StreamableHttpClientTransport } from "@anthropic-ai/sdk/mcp";
-
-const remoteLegalKb = new StreamableHttpClientTransport({
-  url: "https://legal-kb.internal.example.com/mcp",
-  headers: {
-    Authorization: `Bearer ${process.env.LEGAL_KB_API_KEY}`,
+// Connect to a remote MCP server over HTTP (e.g., shared Legal KB service).
+// Pass HTTP server configs directly to the mcpServers option in query().
+for await (const message of query({
+  prompt: "Search legal knowledge base...",
+  options: {
+    mcpServers: {
+      "legal-kb-remote": {
+        type: "http",
+        url: "https://legal-kb.internal.example.com/mcp",
+        headers: {
+          Authorization: `Bearer ${process.env.LEGAL_KB_API_KEY}`,
+        },
+      },
+    },
+    // ...
   },
-});
+})) { /* ... */ }
 ```
 
 ### Hosting: Docker + ECS/Fargate
@@ -668,23 +586,23 @@ export const handler: Handler = async (event) => {
 ### Pros, Cons, Gotchas
 
 **Pros:**
-- Minimal abstraction = minimal magic. You see exactly what's happening
-- MCP is a first-class citizen — best MCP integration of any framework
-- Lifecycle hooks give you clean guardrail and observability injection points
-- Model tiering (Opus/Sonnet/Haiku routing) is trivial because you control the loop
-- Smallest dependency footprint — just `@anthropic-ai/sdk` and `zod`
+- Minimal abstraction = minimal magic. The `query()` generator handles the agentic loop, but you control everything else
+- MCP is a first-class citizen — best MCP integration of any framework. In-process, stdio, and HTTP MCP servers all work via `mcpServers` config
+- `HookCallback` hooks (`PreToolUse`, `PostToolUse`) give you clean guardrail and observability injection points with matcher-based routing
+- Model tiering (Opus/Sonnet/Haiku routing) via subagent `agents` config or multiple `query()` calls
+- `tool()` + Zod schemas = type-safe tool definitions with validation built in
+- Smallest dependency footprint — just `@anthropic-ai/claude-agent-sdk` and `zod`
 
 **Cons:**
 - Claude-only. If you need model-agnostic flexibility, this isn't it
 - No built-in state management — you implement checkpointing yourself
-- No built-in multi-agent patterns — you code supervisor/delegation logic
 - No built-in observability dashboard — you integrate LangSmith, Datadog, or roll your own
 - Python SDK lags behind TypeScript in features
 
 **Gotchas:**
-- `stop_reason === "tool_use"` can return multiple tool calls in one response. Handle all of them, not just the first
-- Token counts grow fast in the agentic loop — the full conversation is sent each iteration. For long-running agents, implement conversation summarization or truncation
-- In-process MCP servers share memory with the agent — a memory leak in the MCP server crashes the agent
+- `query()` handles multi-tool-call responses internally, but your `HookCallback` hooks fire for each tool individually — ensure hooks are idempotent
+- Token counts grow fast in the agentic loop — the full conversation is sent each iteration. For long-running agents, use `maxTurns` to cap iterations and implement conversation summarization
+- In-process MCP servers (via `createSdkMcpServer`) share memory with the agent — a memory leak in the MCP server crashes the agent
 - The SDK API surface is still evolving (v0.x) — pin your version and test before upgrading
 
 ---

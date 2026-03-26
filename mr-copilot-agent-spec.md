@@ -1422,9 +1422,8 @@ async function processVoiceNote(input: {
 ## 8. Orchestrator — Main Agent Loop
 
 ```typescript
-import Anthropic from "@anthropic-ai/sdk";
-
-const client = new Anthropic();
+import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 
 // System prompt for the MR Copilot orchestrator
 const SYSTEM_PROMPT = `You are MR Copilot, an AI assistant for Medical Representatives in the
@@ -1458,105 +1457,105 @@ LANGUAGE:
 - If the MR writes in Hindi, respond in Hindi
 - Use pharma field jargon naturally`;
 
+// --- CRM tools ---
+const getDoctorProfile = tool("get_doctor_profile", "Fetch doctor profile from CRM", getDoctorProfileSchema, getDoctorProfileHandler);
+const searchDoctors = tool("search_doctors", "Search doctors in territory", searchDoctorsSchema, searchDoctorsHandler);
+const getVisitHistory = tool("get_visit_history", "Get visit history for a doctor", getVisitHistorySchema, getVisitHistoryHandler);
+const submitDcrEntry = tool("submit_dcr_entry", "Submit a DCR entry to CRM", submitDCRSchema, submitDCRHandler);
+const getOpenCommitments = tool("get_open_commitments", "Get open commitments for MR", getOpenCommitmentsSchema, getOpenCommitmentsHandler);
+const getCallTargets = tool("get_call_targets", "Get call targets for MR", getCallTargetsSchema, getCallTargetsHandler);
+
+// --- Pharma intelligence tools ---
+const lookupProduct = tool("lookup_product", "Look up product information", lookupProductSchema, lookupProductHandler);
+const getDosage = tool("get_dosage", "Get dosage information for a product", getDosageSchema, getDosageHandler);
+const checkDrugInteraction = tool("check_drug_interaction", "Check drug-drug interactions", checkDrugInteractionSchema, checkDrugInteractionHandler);
+const getClinicalStudy = tool("get_clinical_study", "Retrieve clinical study details", getClinicalStudySchema, getClinicalStudyHandler);
+const compareWithCompetitor = tool("compare_with_competitor", "Compare product with competitor", compareCompetitorSchema, compareCompetitorHandler);
+const handleObjection = tool("handle_objection", "Get evidence-based objection response", handleObjectionSchema, handleObjectionHandler);
+const getRcpaAnalysis = tool("get_rcpa_analysis", "Analyze RCPA data for a doctor", getRCPAAnalysisSchema, getRCPAAnalysisHandler);
+const getMicroLearning = tool("get_micro_learning", "Get micro-learning nudge for a call", getMicroLearningSchema, getMicroLearningHandler);
+
+// --- Field ops tools ---
+const planDailyRoute = tool("plan_daily_route", "Plan optimized daily route", planDailyRouteSchema, planDailyRouteHandler);
+const checkGeoCompliance = tool("check_geo_compliance", "Verify geo-location compliance", checkGeoComplianceSchema, checkGeoComplianceHandler);
+const getSampleInventory = tool("get_sample_inventory", "Get current sample inventory", getSampleInventorySchema, getSampleInventoryHandler);
+const logSampleDistribution = tool("log_sample_distribution", "Log sample distribution to doctor", logSampleDistributionSchema, logSampleDistributionHandler);
+const checkCompliance = tool("check_compliance", "Check UCPMP compliance status", checkComplianceSchema, checkComplianceHandler);
+const transcribeVoiceNote = tool("transcribe_voice_note", "Transcribe MR voice note", transcribeVoiceNoteSchema, transcribeVoiceNoteHandler);
+const parseVoiceToDcr = tool("parse_voice_to_dcr", "Parse voice transcription into DCR entry", parseVoiceToDCRSchema, parseVoiceToDCRHandler);
+
+// --- Analytics tools ---
+const getTeamDashboard = tool("get_team_dashboard", "Get team performance dashboard", getTeamDashboardSchema, getTeamDashboardHandler);
+const getCoachingSignals = tool("get_coaching_signals", "Get coaching signals for team", getCoachingSignalsSchema, getCoachingSignalsHandler);
+
+// Create MCP servers grouping tools by domain
+const crmMcpServer = createSdkMcpServer({
+  name: "crm-mcp",
+  tools: [getDoctorProfile, searchDoctors, getVisitHistory, submitDcrEntry, getOpenCommitments, getCallTargets],
+});
+
+const pharmaIntelMcpServer = createSdkMcpServer({
+  name: "pharma-intel-mcp",
+  tools: [lookupProduct, getDosage, checkDrugInteraction, getClinicalStudy, compareWithCompetitor, handleObjection, getRcpaAnalysis, getMicroLearning],
+});
+
+const fieldOpsMcpServer = createSdkMcpServer({
+  name: "field-ops-mcp",
+  tools: [planDailyRoute, checkGeoCompliance, getSampleInventory, logSampleDistribution, checkCompliance, transcribeVoiceNote, parseVoiceToDcr],
+});
+
+const analyticsMcpServer = createSdkMcpServer({
+  name: "analytics-mcp",
+  tools: [getTeamDashboard, getCoachingSignals],
+});
+
+// Pre-tool-use hook: enforce compliance checks before CRM writes
+const complianceHook: HookCallback = async ({ toolName, toolInput, context }) => {
+  if (toolName === "submit_dcr_entry" && context.autonomy_level < 2) {
+    return {
+      decision: "block",
+      message: "DCR auto-submit requires Level 2 autonomy. Saving as draft for MR review.",
+    };
+  }
+  return { decision: "allow" };
+};
+
 async function runMRCopilot(userMessage: string, context: MRContext) {
-  const tools = [
-    // CRM tools
-    { name: "get_doctor_profile", ...getDoctorProfileSchema },
-    { name: "search_doctors", ...searchDoctorsSchema },
-    { name: "get_visit_history", ...getVisitHistorySchema },
-    { name: "submit_dcr_entry", ...submitDCRSchema },
-    { name: "get_open_commitments", ...getOpenCommitmentsSchema },
-    { name: "get_call_targets", ...getCallTargetsSchema },
+  let finalResult = "";
 
-    // Pharma intelligence tools
-    { name: "lookup_product", ...lookupProductSchema },
-    { name: "get_dosage", ...getDosageSchema },
-    { name: "check_drug_interaction", ...checkDrugInteractionSchema },
-    { name: "get_clinical_study", ...getClinicalStudySchema },
-    { name: "compare_with_competitor", ...compareCompetitorSchema },
-    { name: "handle_objection", ...handleObjectionSchema },
-    { name: "get_rcpa_analysis", ...getRCPAAnalysisSchema },
-    { name: "get_micro_learning", ...getMicroLearningSchema },
-
-    // Field ops tools
-    { name: "plan_daily_route", ...planDailyRouteSchema },
-    { name: "check_geo_compliance", ...checkGeoComplianceSchema },
-    { name: "get_sample_inventory", ...getSampleInventorySchema },
-    { name: "log_sample_distribution", ...logSampleDistributionSchema },
-    { name: "check_compliance", ...checkComplianceSchema },
-    { name: "transcribe_voice_note", ...transcribeVoiceNoteSchema },
-    { name: "parse_voice_to_dcr", ...parseVoiceToDCRSchema },
-
-    // Analytics tools
-    { name: "get_team_dashboard", ...getTeamDashboardSchema },
-    { name: "get_coaching_signals", ...getCoachingSignalsSchema },
-  ];
-
-  const messages = [
-    { role: "user", content: userMessage }
-  ];
-
-  // Agentic loop — let Claude decide which tools to use
-  let response = await client.messages.create({
-    model: "claude-sonnet-4-6-20250514",  // Sonnet for most field interactions
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    tools,
-    messages,
-  });
-
-  while (response.stop_reason === "tool_use") {
-    const toolUseBlocks = response.content.filter(b => b.type === "tool_use");
-    const toolResults = await Promise.all(
-      toolUseBlocks.map(async (toolUse) => {
-        try {
-          // Check compliance before executing CRM writes
-          if (toolUse.name === "submit_dcr_entry" && context.autonomy_level < 2) {
-            return {
-              type: "tool_result",
-              tool_use_id: toolUse.id,
-              content: JSON.stringify({
-                error: "DCR auto-submit requires Level 2 autonomy. Saving as draft for MR review.",
-                draft_saved: true
-              }),
-            };
-          }
-
-          const result = await executeTool(toolUse.name, toolUse.input);
-          return {
-            type: "tool_result",
-            tool_use_id: toolUse.id,
-            content: JSON.stringify(result),
-          };
-        } catch (error) {
-          return {
-            type: "tool_result",
-            tool_use_id: toolUse.id,
-            content: JSON.stringify({ error: error.message }),
-            is_error: true,
-          };
-        }
-      })
-    );
-
-    messages.push({ role: "assistant", content: response.content });
-    messages.push({ role: "user", content: toolResults });
-
-    // Escalate to Opus for complex analysis (RCPA trends, coaching signals)
-    const needsOpus = toolUseBlocks.some(t =>
-      ["get_coaching_signals", "get_rcpa_trends", "get_competitor_intel"].includes(t.name)
-    );
-
-    response = await client.messages.create({
-      model: needsOpus ? "claude-opus-4-6-20250514" : "claude-sonnet-4-6-20250514",
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
-      tools,
-      messages,
-    });
+  // query() handles the full agentic loop — no manual while loop needed
+  for await (const message of query({
+    prompt: userMessage,
+    options: {
+      model: "claude-sonnet-4-6-20250514",  // Sonnet for most field interactions
+      systemPrompt: SYSTEM_PROMPT,
+      mcpServers: {
+        "crm-mcp": crmMcpServer,
+        "pharma-intel-mcp": pharmaIntelMcpServer,
+        "field-ops-mcp": fieldOpsMcpServer,
+        "analytics-mcp": analyticsMcpServer,
+      },
+      permissionMode: "bypassPermissions",
+      maxTurns: 50,
+      hooks: {
+        PreToolUse: [{ matcher: "submit_dcr_entry", hooks: [complianceHook] }],
+      },
+      agents: {
+        "rcpa-analyst": {
+          description: "Specialized sub-agent for complex RCPA trend analysis and coaching signals — uses Opus for deeper reasoning",
+          prompt: "You are an RCPA analysis specialist. Perform deep prescription trend analysis, competitor intelligence, and generate coaching signals for managers.",
+          model: "claude-opus-4-6-20250514",
+          tools: ["get_coaching_signals", "get_rcpa_analysis", "compare_with_competitor", "get_team_dashboard"],
+        },
+      },
+    },
+  })) {
+    if ("result" in message) {
+      finalResult = message.result;
+    }
   }
 
-  return response.content.filter(b => b.type === "text").map(b => b.text).join("\n");
+  return finalResult;
 }
 ```
 

@@ -2174,7 +2174,8 @@ or title issues, consult a qualified property lawyer in Gujarat."`;
 ### Phase Management Logic
 
 ```typescript
-import Anthropic from "@anthropic-ai/sdk";
+import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 
 interface PurchaseState {
   purchaseId: string;
@@ -2355,66 +2356,351 @@ const MODEL_SELECTION: Record<string, string> = {
 ### Orchestrator Entry Point
 
 ```typescript
-import Anthropic from "@anthropic-ai/sdk";
+import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 
-const client = new Anthropic();
+// --- Define tools using the tool() function with Zod schemas ---
+
+const navigateAnyror = tool(
+  "navigate_anyror",
+  "Navigate AnyRoR Gujarat portal to fetch 7/12 extract and 8A mutation history for a given survey number",
+  {
+    district: z.string(),
+    taluka: z.string(),
+    village: z.string(),
+    survey_number: z.string(),
+    record_type: z.enum(["7_12", "8a", "both"]).default("both"),
+    captcha_mode: z.enum(["human", "auto"]).default("human"),
+  },
+  async (params) => {
+    const result = await executePortalNavigation("anyror", params);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const searchRera = tool(
+  "search_rera",
+  "Search Gujarat RERA portal for project registration details, builder information, and complaints",
+  {
+    search_type: z.enum(["project_name", "rera_number"]),
+    search_value: z.string(),
+    district: z.string(),
+  },
+  async (params) => {
+    const result = await executePortalNavigation("rera", params);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const searchEcourts = tool(
+  "search_ecourts",
+  "Search eCourts portal for cases involving specified party names in Gujarat courts",
+  {
+    party_name: z.string(),
+    name_variations: z.array(z.string()),
+    state: z.literal("Gujarat"),
+    district: z.string(),
+    search_scope: z.enum(["district_court", "high_court", "consumer_forum", "all"]),
+    captcha_mode: z.enum(["human", "auto"]).default("human"),
+  },
+  async (params) => {
+    const result = await executePortalNavigation("ecourts", params);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const lookupGarvi = tool(
+  "lookup_garvi",
+  "Search GARVI Gujarat portal for registered documents and jantri rates",
+  {
+    search_type: z.enum(["registered_document", "jantri_rate"]),
+    district: z.string(),
+    sub_registrar: z.string().optional(),
+    document_type: z.enum(["sale_deed", "conveyance_deed", "agreement_to_sell", "all"]).optional(),
+    party_name: z.string().optional(),
+    survey_number: z.string().optional(),
+    date_from: z.string().optional(),
+    date_to: z.string().optional(),
+    zone: z.string().optional(),
+    property_type: z.enum(["residential", "commercial", "industrial"]).optional(),
+  },
+  async (params) => {
+    const result = await executePortalNavigation("garvi", params);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const checkPropertyTax = tool(
+  "check_property_tax",
+  "Check property tax status on Gujarat municipal portals",
+  {
+    city: z.enum(["surat", "ahmedabad", "vadodara", "rajkot"]),
+    search_type: z.enum(["property_id", "owner_name", "zone_ward_survey"]),
+    property_id: z.string().optional(),
+    owner_name: z.string().optional(),
+    zone: z.string().optional(),
+    ward: z.string().optional(),
+    survey_number: z.string().optional(),
+  },
+  async (params) => {
+    const result = await executePortalNavigation("property_tax", params);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const verifyGstin = tool(
+  "verify_gstin",
+  "Verify a builder's GSTIN on the GSTN services portal",
+  {
+    gstin: z.string(),
+    captcha_mode: z.enum(["human", "auto"]).default("human"),
+  },
+  async (params) => {
+    const result = await executePortalNavigation("gstn", params);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const checkRedFlags = tool(
+  "check_red_flags",
+  "Run red flag pattern matching against collected verification data for a property",
+  {
+    verification_data: z.object({
+      anyror_data: z.any().optional(),
+      rera_data: z.any().optional(),
+      ecourts_data: z.any().optional(),
+      garvi_data: z.any().optional(),
+      tax_data: z.any().optional(),
+      gstn_data: z.any().optional(),
+      agreement_data: z.any().optional(),
+    }),
+  },
+  async (params) => {
+    const result = await runRedFlagCheck(params.verification_data);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const getJantriRate = tool(
+  "get_jantri_rate",
+  "Look up jantri (ready reckoner) rate for a specific location in Gujarat",
+  {
+    district: z.string(),
+    taluka: z.string(),
+    village_or_zone: z.string(),
+    survey_number: z.string().optional(),
+    property_type: z.enum(["residential_land", "residential_flat", "commercial", "industrial"]),
+  },
+  async (params) => {
+    const result = await lookupJantriRate(params);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const calculateStampDuty = tool(
+  "calculate_stamp_duty",
+  "Calculate stamp duty, registration fee, and related charges for a Gujarat property transaction",
+  {
+    agreement_value_inr: z.number(),
+    jantri_value_inr: z.number(),
+    property_type: z.enum(["residential", "commercial", "industrial", "plot"]),
+    transaction_type: z.enum(["sale_deed", "agreement_to_sell", "lease", "gift_deed", "mortgage"]),
+    buyer_gender: z.enum(["male", "female", "joint"]),
+    is_first_property: z.boolean(),
+    lease_period_years: z.number().optional(),
+  },
+  async (params) => {
+    const result = await computeStampDuty(params);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const parsePropertyDocument = tool(
+  "parse_property_document",
+  "Parse a property document (PDF/image) and extract structured data",
+  {
+    file_path: z.string(),
+    document_type: z.enum([
+      "7_12_extract", "8a_extract", "encumbrance_certificate", "title_deed",
+      "sale_deed", "builder_agreement", "allotment_letter", "oc", "cc",
+      "noc", "approved_plan", "property_tax_receipt", "other",
+    ]),
+    language: z.enum(["english", "gujarati", "hindi", "mixed"]),
+  },
+  async (params) => {
+    const result = await parseDocument(params);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const analyzeAgreement = tool(
+  "analyze_agreement",
+  "Perform clause-by-clause analysis of a builder agreement for buyer-unfavorable terms",
+  {
+    file_path: z.string(),
+    agreement_type: z.enum(["builder_buyer", "resale", "plot_sale", "lease"]),
+    property_value_inr: z.number(),
+    rera_carpet_area_sqm: z.number().optional(),
+  },
+  async (params) => {
+    const result = await runAgreementAnalysis(params);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const createPurchase = tool(
+  "create_purchase",
+  "Create a new property purchase tracking record and initialize dossier",
+  {
+    property_address: z.string(),
+    property_type: z.enum([
+      "residential_flat", "commercial_office", "residential_plot",
+      "commercial_plot", "row_house", "bungalow",
+    ]),
+    city: z.string(),
+    district: z.string(),
+    survey_number: z.string().optional(),
+    rera_number: z.string().optional(),
+    builder_name: z.string().optional(),
+    seller_name: z.string(),
+    buyer_name: z.string(),
+    expected_price_inr: z.number(),
+  },
+  async (params) => {
+    const result = await initializePurchase(params);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const logVerification = tool(
+  "log_verification",
+  "Log a verification action to the purchase dossier's verification log",
+  {
+    purchase_id: z.string(),
+    portal: z.enum(["anyror", "rera", "ecourts", "garvi", "smc", "gstn", "manual"]),
+    action: z.string(),
+    input_params: z.any(),
+    result_data: z.any(),
+    screenshots: z.array(z.object({ filename: z.string(), sha256: z.string() })),
+    red_flags: z.array(z.object({
+      severity: z.string(),
+      code: z.string(),
+      description: z.string(),
+      recommendation: z.string(),
+    })),
+    agent_notes: z.string(),
+  },
+  async (params) => {
+    const result = await writeVerificationLog(params);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+const generateDossierSummary = tool(
+  "generate_dossier_summary",
+  "Generate a comprehensive PDF summary of the purchase dossier",
+  {
+    purchase_id: z.string(),
+    include_screenshots: z.boolean(),
+    include_cost_breakdown: z.boolean(),
+    include_agreement_review: z.boolean(),
+    include_checklist: z.boolean(),
+  },
+  async (params) => {
+    const result = await buildDossierPdf(params);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  }
+);
+
+// --- Create MCP servers from tool groups ---
+
+const browserMcpServer = createSdkMcpServer({
+  name: "browser-mcp",
+  tools: [navigateAnyror, searchRera, searchEcourts, lookupGarvi, checkPropertyTax, verifyGstin],
+});
+
+const propertyKbMcpServer = createSdkMcpServer({
+  name: "property-kb-mcp",
+  tools: [getJantriRate, calculateStampDuty, checkRedFlags],
+});
+
+const documentMcpServer = createSdkMcpServer({
+  name: "document-mcp",
+  tools: [parsePropertyDocument, analyzeAgreement],
+});
+
+const trackerMcpServer = createSdkMcpServer({
+  name: "tracker-mcp",
+  tools: [createPurchase, logVerification, generateDossierSummary],
+});
+
+// --- Orchestrator using query() async generator ---
 
 async function runPurchaseAgent(purchaseId: string) {
   const state = await loadPurchaseState(purchaseId);
-  const tools = getToolsForPhase(state.currentPhase);
 
-  const messages: Anthropic.MessageParam[] = [
-    {
-      role: "user",
-      content: buildPhaseContext(state),
-    },
-  ];
-
-  let continueLoop = true;
-
-  while (continueLoop) {
-    const response = await client.messages.create({
+  for await (const message of query({
+    prompt: buildPhaseContext(state),
+    options: {
       model: getModelForTask("orchestration"),
-      max_tokens: 16384,
-      system: SYSTEM_PROMPT,
-      tools: tools,
-      messages: messages,
-    });
-
-    // Process response — handle tool calls, text output, phase transitions
-    for (const block of response.content) {
-      if (block.type === "tool_use") {
-        const toolResult = await executeToolCall(block.name, block.input, state);
-
-        // Log every tool call to verification log
-        if (isVerificationTool(block.name)) {
-          await logVerificationEntry(state.purchaseId, block.name, block.input, toolResult);
-        }
-
-        messages.push({
-          role: "assistant",
-          content: response.content,
-        });
-        messages.push({
-          role: "user",
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: block.id,
-              content: JSON.stringify(toolResult),
-            },
+      systemPrompt: SYSTEM_PROMPT,
+      maxTurns: 50,
+      mcpServers: {
+        "browser-mcp": browserMcpServer,
+        "property-kb-mcp": propertyKbMcpServer,
+        "document-mcp": documentMcpServer,
+        "tracker-mcp": trackerMcpServer,
+      },
+      agents: {
+        "due-diligence": {
+          description: "Automates browser navigation across Gujarat government portals (AnyRoR, RERA, eCourts, GARVI, SMC, GSTN). Captures screenshots, extracts data, cross-references findings, and produces a risk-scored due diligence report.",
+          prompt: `You are the Due Diligence sub-agent. Run all portal checks for the given property, capture screenshot evidence at every step, cross-reference seller/builder names across portals, and produce a structured due diligence report with risk score.`,
+          tools: [
+            "navigate_anyror", "search_rera", "search_ecourts",
+            "lookup_garvi", "check_property_tax", "verify_gstin",
+            "check_red_flags", "log_verification",
           ],
-        });
-      } else if (block.type === "text") {
-        // Check if this is a phase checkpoint
-        if (isPhaseCheckpointMessage(block.text)) {
-          continueLoop = false; // Pause for buyer input
-        }
-      }
-    }
+        },
+        "document-analyzer": {
+          description: "Reviews builder agreements, sale deeds, allotment letters and flags buyer-unfavorable clauses. Compares against Gujarat RERA rules and explains findings in plain language.",
+          prompt: `You are the Document Analyzer sub-agent. Review property documents clause-by-clause, flag unfavorable terms, check RERA compliance, compare carpet area figures, and explain findings in simple language for first-time buyers.`,
+          tools: [
+            "parse_property_document", "analyze_agreement",
+            "get_required_documents", "log_verification",
+          ],
+        },
+        "cost-intelligence": {
+          description: "Calculates total cost of property ownership including stamp duty, registration, GST, deposits, and all hidden charges using jantri rates.",
+          prompt: `You are the Cost Intelligence sub-agent. Look up jantri rates, compute stamp duty and registration fees, add all deposits and charges, and produce a comprehensive cost breakdown showing the ACTUAL total outflow.`,
+          tools: [
+            "get_jantri_rate", "calculate_stamp_duty",
+            "get_registration_fee", "add_payment",
+          ],
+        },
+        "registration-guide": {
+          description: "Provides step-by-step guidance for property registration at the Gujarat Sub-Registrar's office, including e-stamping, document preparation, and post-registration steps.",
+          prompt: `You are the Registration Guide sub-agent. Provide step-by-step registration guidance tailored to the specific property type and Sub-Registrar jurisdiction, covering e-stamping, biometric verification, and document requirements.`,
+          tools: [
+            "get_required_documents", "get_checklist", "add_payment",
+          ],
+        },
+        "purchase-tracker": {
+          description: "Maintains the master purchase dossier with all screenshots, verification results, documents, payments, and checklist status. Generates dossier PDF on demand.",
+          prompt: `You are the Purchase Tracker sub-agent. Maintain the purchase dossier, track phase transitions, log verification evidence, manage payment records, and generate comprehensive dossier summary PDFs.`,
+          tools: [
+            "get_checklist", "generate_dossier_summary",
+          ],
+        },
+      },
+    },
+  })) {
+    if ("result" in message) {
+      console.log(message.result);
 
-    if (response.stop_reason === "end_turn") {
-      continueLoop = false;
+      // Check if this is a phase checkpoint — pause for buyer input
+      if (isPhaseCheckpointMessage(message.result)) {
+        break; // Pause the agent loop for buyer confirmation
+      }
     }
   }
 }
