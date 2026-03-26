@@ -4,6 +4,7 @@
 export { analyzeContract } from "./agent.js";
 export type {
   AnalyzeContractOptions,
+  ProgressEvent,
 } from "./agent.js";
 export type {
   ContractAnalysisResult,

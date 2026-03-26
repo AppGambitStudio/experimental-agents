@@ -3,8 +3,48 @@
 // Usage: npm run analyze -- --file <path> --counterparty <name> --type <type> --role <role> --state <state>
 
 import "dotenv/config";
-import { analyzeContract } from "./agent.js";
+import { analyzeContract, type ProgressEvent } from "./agent.js";
 import { resolve } from "path";
+
+// ANSI color codes for terminal output
+const colors = {
+  reset: "\x1b[0m",
+  dim: "\x1b[2m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  blue: "\x1b[34m",
+  magenta: "\x1b[35m",
+  cyan: "\x1b[36m",
+  bold: "\x1b[1m",
+};
+
+function formatProgress(event: ProgressEvent): void {
+  const time = new Date(event.timestamp).toLocaleTimeString("en-IN", { hour12: false });
+  const prefix = `${colors.dim}[${time}]${colors.reset}`;
+
+  switch (event.type) {
+    case "init":
+      console.log(`${prefix} ${colors.cyan}⚡${colors.reset} ${event.message}`);
+      break;
+    case "tool_call":
+      console.log(
+        `${prefix} ${colors.blue}🔧${colors.reset} ${colors.bold}${event.message}${colors.reset}${event.detail ? ` ${colors.dim}(${event.detail})${colors.reset}` : ""}`
+      );
+      break;
+    case "streaming":
+      console.log(`${prefix} ${colors.dim}💭 ${event.message}${colors.reset}`);
+      break;
+    case "done": {
+      const duration = event.duration ? `${(event.duration / 1000).toFixed(1)}s` : "?";
+      const cost = event.cost !== undefined ? `$${event.cost.toFixed(4)}` : "?";
+      const turns = event.turnNumber ?? "?";
+      console.log(
+        `\n${prefix} ${colors.green}✅ ${event.message}${colors.reset} ${colors.dim}(${turns} turns, ${duration}, ${cost})${colors.reset}\n`
+      );
+      break;
+    }
+  }
+}
 
 function parseArgs(): Record<string, string> {
   const args: Record<string, string> = {};
@@ -81,8 +121,10 @@ Example:
       ourRole: args["role"]!,
       state: args["state"]!,
       contractValue: args["value"] ? parseInt(args["value"], 10) : undefined,
+      onProgress: formatProgress,
     });
 
+    console.log("\n" + "═".repeat(60));
     console.log(result);
   } catch (error) {
     console.error("Error analyzing contract:", error);

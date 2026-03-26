@@ -76,6 +76,17 @@ export interface AnalyzeContractOptions {
   ourRole: string;
   state: string;
   contractValue?: number;
+  onProgress?: (event: ProgressEvent) => void;
+}
+
+export interface ProgressEvent {
+  type: "init" | "tool_call" | "tool_result" | "thinking" | "streaming" | "done";
+  message: string;
+  detail?: string;
+  timestamp: string;
+  turnNumber?: number;
+  cost?: number;
+  duration?: number;
 }
 
 export async function analyzeContract(options: AnalyzeContractOptions): Promise<string> {
@@ -96,7 +107,13 @@ Steps:
 6. For non-compete, moral rights, and penalty clauses, use check_enforceability
 7. Generate the full analysis report with risk score, flagged clauses, missing clauses, stamp duty, and negotiation playbook`;
 
+  const emit = options.onProgress ?? (() => {});
+  const ts = () => new Date().toISOString();
+
   let result = "";
+  let turnCount = 0;
+
+  emit({ type: "init", message: "Starting contract analysis...", timestamp: ts() });
 
   for await (const message of query({
     prompt,
@@ -113,8 +130,95 @@ Steps:
       maxTurns: 30,
     },
   })) {
-    if ("result" in message) {
-      result = String(message.result);
+    // System init message
+    if ("type" in message && message.type === "system" && "subtype" in message && message.subtype === "init") {
+      emit({ type: "init", message: "Agent initialized, connected to MCP servers", timestamp: ts() });
+    }
+
+    // Assistant message — contains tool_use blocks and text
+    if ("type" in message && message.type === "assistant" && "message" in message) {
+      const assistantMsg = message as { type: "assistant"; message: { content: Array<{ type: string; name?: string; input?: Record<string, unknown>; text?: string }> } };
+      const content = assistantMsg.message?.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === "tool_use" && block.name) {
+            turnCount++;
+            const toolName = block.name;
+            const toolDisplayNames: Record<string, string> = {
+              "mcp__document-mcp__parse_document": "Parsing PDF document",
+              "mcp__document-mcp__extract_metadata": "Extracting document metadata",
+              "mcp__legal-kb-mcp__search_clause_patterns": "Searching Indian law clause patterns",
+              "mcp__legal-kb-mcp__get_required_clauses": "Checking required clauses for contract type",
+              "mcp__legal-kb-mcp__get_stamp_duty": "Calculating stamp duty",
+              "mcp__legal-kb-mcp__check_enforceability": "Checking enforceability under Indian law",
+              "mcp__contract-mcp__create_contract": "Registering contract in repository",
+              "mcp__contract-mcp__add_version": "Adding contract version",
+              "mcp__contract-mcp__store_analysis": "Storing analysis results",
+            };
+            const displayName = toolDisplayNames[toolName] ?? `Calling tool: ${toolName.replace("mcp__legal-kb-mcp__", "").replace("mcp__document-mcp__", "").replace("mcp__contract-mcp__", "")}`;
+
+            const detail = block.input
+              ? Object.entries(block.input)
+                  .filter(([k]) => !["text", "document_text", "analysis", "clause_text"].includes(k))
+                  .map(([k, v]) => `${k}=${typeof v === "string" ? v.slice(0, 50) : v}`)
+                  .join(", ")
+              : undefined;
+
+            emit({
+              type: "tool_call",
+              message: displayName,
+              detail: detail || undefined,
+              timestamp: ts(),
+              turnNumber: turnCount,
+            });
+          }
+
+          if (block.type === "text" && block.text && !("result" in message)) {
+            // Streaming text from assistant (intermediate thinking)
+            const preview = block.text.slice(0, 100).replace(/\n/g, " ");
+            if (preview.length > 20) {
+              emit({
+                type: "streaming",
+                message: preview + (block.text.length > 100 ? "..." : ""),
+                timestamp: ts(),
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Final result
+    if ("type" in message && message.type === "result") {
+      const resultMsg = message as {
+        type: "result";
+        subtype: string;
+        result?: string;
+        num_turns?: number;
+        total_cost_usd?: number;
+        duration_ms?: number;
+      };
+
+      if (resultMsg.subtype === "success" && resultMsg.result) {
+        result = resultMsg.result;
+        emit({
+          type: "done",
+          message: "Analysis complete",
+          timestamp: ts(),
+          turnNumber: resultMsg.num_turns,
+          cost: resultMsg.total_cost_usd,
+          duration: resultMsg.duration_ms,
+        });
+      } else {
+        emit({
+          type: "done",
+          message: `Analysis ended: ${resultMsg.subtype}`,
+          timestamp: ts(),
+          turnNumber: resultMsg.num_turns,
+          cost: resultMsg.total_cost_usd,
+          duration: resultMsg.duration_ms,
+        });
+      }
     }
   }
 
