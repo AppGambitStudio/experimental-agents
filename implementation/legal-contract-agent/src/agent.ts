@@ -107,7 +107,7 @@ Steps:
         "legal-kb-mcp": legalKbMcp,
         "contract-mcp": contractMcp,
       },
-      model: "claude-sonnet-4-6-20250514",
+      model: "sonnet",
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
       maxTurns: 30,
