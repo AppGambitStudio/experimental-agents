@@ -119,6 +119,148 @@ NOT_ASSESSED → GAP_IDENTIFIED → REMEDIATION_IN_PROGRESS → IMPLEMENTED → 
 
 Key design decision: The engagement-level state machine is not strictly linear. After initial scoping, Gap Assessment, Remediation, Policy Drafting, and Evidence Collection can run in parallel. The orchestrator manages dependencies at the individual control level, not at the phase level.
 
+### Tiered Autonomy Model
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    AUTONOMY LEVELS                               │
+├──────────┬──────────────────────────────────────────────────────┤
+│          │                                                      │
+│ LEVEL 1  │  Agent: Assess & Recommend                            │
+│ (Trust   │  ──────────────────────────────────────────          │
+│  building│  Agent reads systems via MCP, analyzes gaps, drafts   │
+│  phase)  │  policies and remediation plans. ALL outputs are      │
+│          │  proposals — human must review and approve every       │
+│          │  control status change, policy, and evidence artifact. │
+│          │  No auto-submission to auditor. No auto-closing gaps.  │
+│          │                                                      │
+├──────────┼──────────────────────────────────────────────────────┤
+│          │                                                      │
+│ LEVEL 2  │  Agent: Auto-Collect, Approve-to-Submit               │
+│ (Proven  │  ──────────────────────────────────────────          │
+│  trust)  │  Auto-collects evidence via MCP on schedule. Auto-    │
+│          │  validates evidence (date range, completeness, hash).  │
+│          │  Auto-generates monitoring alerts and posture scores.  │
+│          │  Human approval still required for:                    │
+│          │  - Submitting evidence to auditor                     │
+│          │  - Closing gaps as "remediated"                        │
+│          │  - Approving policies                                 │
+│          │  - Marking controls as "compliant"                    │
+│          │  - Any management response to auditor                 │
+│          │                                                      │
+├──────────┼──────────────────────────────────────────────────────┤
+│          │                                                      │
+│ LEVEL 3  │  Agent: Full Automation with Audit Gates               │
+│ (Full    │  ──────────────────────────────────────────          │
+│  trust)  │  Auto-collects, auto-validates, auto-packages         │
+│          │  evidence. Auto-updates control statuses based on      │
+│          │  MCP verification. Auto-sends routine monitoring       │
+│          │  reports. Human approval ONLY for:                    │
+│          │  - Submitting to auditor (always requires human)      │
+│          │  - Policy approval (always requires human)            │
+│          │  - Management responses (always requires human)       │
+│          │  - Gap acceptance decisions (always requires human)   │
+│          │                                                      │
+├──────────┼──────────────────────────────────────────────────────┤
+│          │                                                      │
+│ ALL      │  ⛔ NEVER AUTO-EXECUTED (regardless of level)          │
+│ LEVELS   │  - Submitting evidence or responses to auditor        │
+│          │  - Approving policies on behalf of management         │
+│          │  - Closing critical/high gaps without human review    │
+│          │  - Generating or fabricating evidence artifacts        │
+│          │  - Modifying evidence after collection (immutable)    │
+│          │  - Accepting audit findings without mgmt review       │
+│          │  - Changing audit scope or criteria                   │
+│          │  - Granting system access or changing permissions     │
+│          │  - Communicating directly with auditors               │
+│          │                                                      │
+└──────────┴──────────────────────────────────────────────────────┘
+```
+
+**Enforcement — Role-Based Approval Gates:**
+
+```typescript
+// Approval gates enforced at the database level, not just prompt level
+type ApprovalAction =
+  | "submit_evidence_to_auditor"
+  | "approve_policy"
+  | "close_gap"
+  | "mark_control_compliant"
+  | "send_management_response"
+  | "accept_risk"
+  | "change_audit_scope"
+  | "modify_control_matrix";
+
+type Role = "admin" | "compliance_manager" | "control_owner" | "auditor_readonly";
+
+const APPROVAL_MATRIX: Record<ApprovalAction, Role[]> = {
+  submit_evidence_to_auditor:  ["compliance_manager", "admin"],
+  approve_policy:              ["compliance_manager", "admin"],
+  close_gap:                   ["compliance_manager", "control_owner", "admin"],
+  mark_control_compliant:      ["compliance_manager", "admin"],
+  send_management_response:    ["admin"],  // Only admin/management can respond to auditor
+  accept_risk:                 ["admin"],  // Risk acceptance is a management decision
+  change_audit_scope:          ["compliance_manager", "admin"],
+  modify_control_matrix:       ["compliance_manager", "admin"],
+};
+
+// Database-level enforcement — agent cannot bypass this
+async function requestApproval(
+  action: ApprovalAction,
+  entityId: string,
+  requestedBy: string,  // "agent:evidence-agent" or user email
+  details: Record<string, unknown>,
+): Promise<{ approved: boolean; approver?: string }> {
+  // 1. Create approval request in DB
+  const request = await db.approvalRequests.create({
+    action,
+    entity_id: entityId,
+    requested_by: requestedBy,
+    details: JSON.stringify(details),
+    required_roles: APPROVAL_MATRIX[action],
+    status: "pending",
+    created_at: new Date(),
+  });
+
+  // 2. Notify eligible approvers
+  const approvers = await db.users.findByRoles(APPROVAL_MATRIX[action]);
+  await notifyApprovers(approvers, request);
+
+  // 3. Agent WAITS — cannot proceed without approval
+  // This is a blocking operation. The agent saves state and resumes
+  // when a human approves or rejects.
+  return { approved: false };  // Will be updated by human action
+}
+
+// Pre-tool hook: intercept actions that require approval
+const approvalGateHook: HookCallback = async (input) => {
+  const toolName = (input as any).tool_name;
+  const toolInput = (input as any).tool_input;
+
+  const actionMap: Record<string, ApprovalAction> = {
+    "submit_evidence_package": "submit_evidence_to_auditor",
+    "approve_policy_version": "approve_policy",
+    "close_gap": "close_gap",
+    "update_control_status_compliant": "mark_control_compliant",
+    "send_auditor_response": "send_management_response",
+    "accept_gap_risk": "accept_risk",
+  };
+
+  const requiredAction = actionMap[toolName];
+  if (requiredAction) {
+    const approval = await checkExistingApproval(requiredAction, toolInput.entity_id);
+    if (!approval?.approved) {
+      return {
+        decision: "block",
+        message: `This action requires approval from: ${APPROVAL_MATRIX[requiredAction].join(" or ")}. Approval request created.`,
+      };
+    }
+  }
+
+  return {};
+};
+```
+
 ### Data Flow
 
 1. **Scope** — Interview stakeholders, select TSC criteria, generate Control Matrix
@@ -1579,7 +1721,120 @@ Agent: [Automated monitoring alert — Critical]
       Shall I create a remediation task and notify the DevOps team via Slack?
 ```
 
-### 8.5 Consulting Firm Multi-Client View
+### 8.5 Deep Scoping Interview — Probing Beyond Surface Answers
+
+This shows how the agent digs into reality, not just what the company claims:
+
+```
+User: We handle access provisioning through Okta. When someone joins, IT sets them up same day.
+
+Agent: Good. Let me dig into a few specifics auditors will ask about:
+
+      1. When a new employee is provisioned, is there a formal ACCESS REQUEST process?
+         (e.g., a Jira ticket, an email from the manager, an HR workflow)
+         Or does someone on IT just "know" to create the account?
+
+User: Usually the manager pings our IT person on Slack and says "set up John for engineering."
+
+Agent: ⚠️ That's a gap for CC6.2 (Access Provisioning). Auditors will want to see:
+      - A documented approval trail (who requested, who approved, when)
+      - Separation: the requester shouldn't be the provisioner
+
+      Your current process: manager DMs IT on Slack → IT creates account.
+      What auditors see: no formal approval, no audit trail, no separation of duties.
+
+      Quick fix options:
+      A) Use Okta Workflows — manager submits request, IT admin approves, Okta provisions
+      B) Create a Jira ticket template: "New User Access Request" with manager approval step
+      C) Minimum: use a Slack workflow form that logs to a channel (auditable, not ideal but passable)
+
+      Which approach fits your team's workflow best?
+
+User: Option B sounds easiest. But honestly, for the last 6 months we've been doing Slack DMs.
+
+Agent: Understood. Here's the honest picture for auditors:
+
+      📊 SITUATION:
+      - Observation period: Jan 1 - Jun 30, 2026
+      - Months 1-6: access provisioning via informal Slack DMs (no audit trail)
+      - If we implement Jira workflow now (late March), we'll have:
+        * Months 1-3: no formal process (gap)
+        * Months 4-6: formal process with Jira tickets (compliant)
+
+      🎯 AUDITOR IMPACT:
+      This will likely be a FINDING (not an exception) because:
+      - The control was implemented partway through the observation period
+      - Auditor will note: "Control was not operating for the full period"
+      - Management response: "Process was informal prior to [date]. Formal
+        Jira-based workflow implemented on [date] and has been operating since."
+
+      💡 OPTIONS:
+      1. Accept the finding — implement Jira workflow NOW, have 3 months of evidence
+      2. Shorten observation period — start from April 1 (only 3 months, some auditors won't accept)
+      3. Postpone audit to October — gives you 6+ months of clean evidence
+
+      My recommendation: Option 1. A management-response finding is much better than
+      no process at all. Auditors expect startups to improve during the observation
+      period. Let's implement the Jira workflow this week.
+
+      Shall I create the remediation plan with steps and timeline?
+```
+
+### 8.6 Evidence Agent Handling Conflicting Data
+
+```
+Agent: [Evidence Collection — CC6.3 Access Removal]
+
+      I found a CONFLICT between systems:
+
+      📊 DATA FROM OKTA (via MCP):
+      - Employee: Sarah Chen
+      - Okta status: DEACTIVATED
+      - Deactivation date: 2026-02-15 09:30 UTC
+
+      📊 DATA FROM HRIS / BAMBOOHR:
+      - Employee: Sarah Chen
+      - Termination date: 2026-02-12
+      - Last working day: 2026-02-12
+
+      ⚠️ CONFLICT:
+      Access was revoked 3 DAYS after termination date.
+      Your Access Control Policy states: "Access revoked within 24 hours of termination."
+
+      This is exactly the kind of thing auditors will sample and catch.
+
+      📋 WHAT I NEED FROM YOU:
+      1. Was there a reason for the 3-day delay? (e.g., handover period, error?)
+      2. Is this an isolated case or a pattern?
+
+      I'm checking all other terminations in the observation period now...
+
+      [Scanning 12 termination events in observation period]
+
+      RESULTS:
+      ✅ 9/12 deprovisioned within 24 hours (compliant)
+      ⚠️ 3/12 deprovisioned after 24 hours:
+         - Sarah Chen: 3 days late (Feb 12 → Feb 15)
+         - Mike Rodriguez: 2 days late (Mar 3 → Mar 5)
+         - Priya Nair: 5 days late (Apr 20 → Apr 25)
+
+      📊 COMPLIANCE RATE: 75% (9/12)
+
+      🎯 AUDITOR ASSESSMENT:
+      This is likely a HIGH finding. Auditors typically sample 25+ events
+      and expect >95% compliance. 75% will be flagged as a control deficiency.
+
+      💡 RECOMMENDED ACTIONS:
+      1. For each late deprovisioning, document the root cause
+      2. Implement automated deprovisioning: HRIS termination → Okta deactivation
+         (Okta has a BambooHR integration that does this automatically)
+      3. Create a weekly reconciliation check: compare active Okta users vs HRIS active employees
+      4. For the 3 exceptions, prepare management explanations for auditor
+
+      Shall I create the remediation plan and draft the management explanations?
+```
+
+### 8.7 Consulting Firm Multi-Client View
 
 ```
 User: Show me the compliance posture across all my clients.
@@ -1842,7 +2097,497 @@ interface AgentSessionDDB {
 
 ---
 
-## 11. AWS Infrastructure Architecture
+## 11. SOC 2 Realities — What the Textbooks Don't Tell You
+
+### The Delvé Lesson: Why AI Must Make Compliance Harder to Fake, Not Easier
+
+In 2025-2026, audit firm Delvé was found to have allegedly issued SOC 2 reports without conducting proper examinations — rubber-stamping compliance for clients who may not have actually met the criteria. This is the nightmare scenario for the compliance industry and a critical design constraint for any AI agent in this space.
+
+**The temptation with AI compliance tools:** Make the process faster and easier. Auto-generate policies. Auto-collect evidence. Auto-close gaps. Ship the report.
+
+**The correct design philosophy:** Make the process faster BUT harder to fake. The agent should be the **honest broker** — the system that flags when evidence is missing, when controls aren't actually operating, when a gap can't be remediated in time, and when the right answer is "postpone the audit."
+
+**Design principles derived from the Delvé incident:**
+
+| Principle | Implementation |
+|-----------|---------------|
+| **Evidence immutability** | SHA-256 hash on all artifacts at collection time. S3 versioning prevents modification. Any re-collection creates a new artifact, not an overwrite. Audit trail logs every access. |
+| **No evidence fabrication** | The agent can COLLECT evidence from systems and VALIDATE it. It can NEVER generate, create, or synthesize evidence artifacts. If evidence doesn't exist in the source system, the control has a gap — period. |
+| **Human-in-the-loop at every gate** | Evidence submission to auditor, policy approval, gap closure, management responses — all require human sign-off. The agent prepares and recommends; humans decide. |
+| **Honest gap reporting** | If a control isn't implemented, the agent says so. No euphemisms, no "partially implemented when it's really missing. Gap severity classification must be calibrated to what auditors will actually find. |
+| **Anti-rubber-stamping** | The agent tracks whether a human actually reviewed evidence before approving (time spent, annotations, questions asked). A "reviewed" timestamp 2 seconds after creation is flagged as suspicious. |
+| **Observation period integrity** | If CloudTrail was enabled 3 months into a 12-month observation period, the agent flags that evidence covers only 9 months. It doesn't pretend the full period is covered. |
+| **Auditor independence** | The agent helps the CLIENT prepare, not the auditor audit. It never suggests how to present evidence to "look better" — it presents factual evidence and lets auditors draw conclusions. |
+
+```typescript
+// Anti-rubber-stamping: track review quality
+interface ReviewMetrics {
+  approval_id: string;
+  entity_type: "evidence" | "policy" | "gap_closure" | "management_response";
+  entity_id: string;
+  reviewer: string;
+  presented_at: string;         // When agent presented for review
+  approved_at: string;          // When human approved
+  time_spent_seconds: number;   // Time between presentation and approval
+  reviewer_annotations: number; // Did they add comments/changes?
+  reviewer_questions: number;   // Did they ask the agent questions?
+  suspicious: boolean;          // Flag if review looks rubber-stamped
+}
+
+function assessReviewQuality(metrics: ReviewMetrics): ReviewQualityAssessment {
+  const warnings: string[] = [];
+
+  // Flag suspiciously fast reviews
+  if (metrics.entity_type === "policy" && metrics.time_spent_seconds < 120) {
+    warnings.push("Policy approved in under 2 minutes — typical policy review takes 10-30 minutes");
+  }
+  if (metrics.entity_type === "evidence" && metrics.time_spent_seconds < 30) {
+    warnings.push("Evidence approved in under 30 seconds — was it actually reviewed?");
+  }
+  if (metrics.entity_type === "management_response" && metrics.time_spent_seconds < 60) {
+    warnings.push("Management response approved in under 1 minute — auditor responses should be carefully reviewed");
+  }
+
+  // Flag batch approvals (human approving many items without reading)
+  // Tracked at session level, not individual item
+
+  return {
+    quality: warnings.length === 0 ? "adequate" : "flagged",
+    warnings,
+    logged_at: new Date().toISOString(),
+  };
+}
+```
+
+### 11.1 Observation Period Realities
+
+The spec says "evidence must cover the full observation period." Reality is messier:
+
+| Scenario | What Happens in Practice | Agent Should Do |
+|----------|------------------------|-----------------|
+| **CloudTrail enabled late** | Company enabled CloudTrail 4 months into a 12-month observation period | Flag: "Evidence covers 8/12 months. Options: (1) Shorten observation period to 8 months, (2) Provide management certification for months 1-4 + spot checks, (3) Postpone audit start to accumulate 12 months." |
+| **New control implemented mid-period** | Company implemented MFA 6 months into observation period | Flag: "MFA evidence available for 6/12 months. For Type II, auditor needs evidence the control was operating for the ENTIRE period. This will likely be a finding with management response." |
+| **Employee left, no HRIS integration existed** | Deprovisioning happened but wasn't logged in first 3 months | Flag: "Access removal evidence exists for months 4-12 only. Months 1-3 covered by: (1) Manager attestation that departures were handled, (2) Current active user list showing no stale accounts." |
+| **Tool migration mid-period** | Company moved from Jenkins to GitHub Actions at month 6 | Flag: "Change management evidence split across two systems. Collect from both: Jenkins (months 1-6) + GitHub Actions (months 7-12). Ensure no gap at transition." |
+| **Audit period too short** | Enterprise prospect needs the report in 2 months, wants 3-month Type II | Recommend: "3-month observation period is the minimum. Some auditors won't accept less than 6 months. Your prospect may question a 3-month report. If timing allows, 6 months is standard." |
+
+### 11.2 Control Effectiveness vs. Existence
+
+This is the gap most first-time companies don't understand. Auditors don't just check if a control EXISTS — they test if it's OPERATING EFFECTIVELY.
+
+| Control | "Exists" (Not Enough) | "Operates Effectively" (What Auditors Want) |
+|---------|----------------------|---------------------------------------------|
+| **Access reviews** | Policy says "quarterly access reviews" | Auditor samples 3 quarters of the observation period and verifies: (1) Reviews actually happened, (2) Findings were actioned, (3) Inappropriate access was revoked |
+| **MFA enforcement** | MFA is available in Okta | Auditor checks: (1) MFA is REQUIRED (not optional), (2) 100% enrollment, (3) No exceptions or bypass policies active |
+| **Change management** | PR approval is required | Auditor samples 25-40 PRs from the observation period: (1) All have approvals, (2) No self-approvals, (3) Approvals happened BEFORE merge, not after |
+| **Incident response** | IR plan document exists | Auditor checks: (1) Plan was tested (tabletop exercise), (2) A real incident was handled per the plan, or (3) If no incidents occurred, test exercise + documented readiness |
+| **Backup & DR** | Backups are configured | Auditor checks: (1) Backups ran successfully throughout the period, (2) A restore test was performed, (3) RPO/RTO targets were met in the test |
+
+**Agent behavior:** When the agent collects evidence for a control, it should explicitly check for effectiveness, not just existence:
+
+```typescript
+interface EffectivenessCheck {
+  control_id: string;
+  existence_verified: boolean;      // Is the control configured/documented?
+  effectiveness_evidence: {
+    sampling_method: string;        // "Full population" | "Sample of 25" | "Quarterly check"
+    sample_size?: number;
+    pass_count: number;
+    fail_count: number;
+    pass_rate: number;              // Must be 100% for many controls
+    exceptions: EffectivenessException[];
+  };
+  agent_assessment: "operating_effectively" | "exists_not_effective" | "not_implemented";
+  auditor_likely_finding: string;   // Agent's prediction of what auditor will say
+}
+
+interface EffectivenessException {
+  description: string;              // "PR #1247 merged without required approval on 2026-01-15"
+  control_id: string;
+  date: string;
+  severity: "exception" | "observation";
+  management_explanation?: string;  // "Emergency hotfix — approved retroactively by CTO"
+}
+```
+
+### 11.3 When to Advise Postponing the Audit
+
+Sometimes the right answer is "you're not ready." The agent should recognize these situations:
+
+| Signal | Threshold | Agent Recommendation |
+|--------|-----------|---------------------|
+| **Critical gaps with < 4 weeks to audit** | Any critical gap without a clear 2-week fix | "Postpone. A critical gap = qualified opinion. Better to delay 2 months and get clean report than rush and get qualified." |
+| **MFA < 90% enrollment** | >10% of users without MFA | "This is the #1 thing auditors check. Get to 100% before audit starts. Postpone if you can't achieve it." |
+| **No DR test in observation period** | DR test > 12 months ago or never performed | "Auditors will sample DR test evidence. No test = finding. Schedule one before audit fieldwork." |
+| **Observation period < 3 months** | Less than 3 months of evidence | "Most auditors won't issue a Type II report with < 3 months. Standard is 6-12 months. Postpone to accumulate evidence." |
+| **Access review never performed** | Zero documented access reviews in observation period | "Auditors sample quarterly reviews. Zero reviews = exception on CC6.1 and CC6.2. Conduct one immediately and postpone audit to accumulate at least 2 reviews." |
+| **New critical system with no logging** | Production system without audit logging | "If a production system has no logging, multiple CC7 controls fail. Enable logging NOW and accumulate at least 3 months of logs before audit." |
+
+```typescript
+// Pre-audit readiness assessment — run before confirming audit start date
+async function assessAuditReadiness(engagementId: string): Promise<ReadinessAssessment> {
+  const controls = await db.controls.findByEngagement(engagementId);
+  const gaps = await db.gaps.findOpen(engagementId);
+  const evidence = await db.evidence.findByEngagement(engagementId);
+  const engagement = await db.engagements.findById(engagementId);
+
+  const criticalGaps = gaps.filter(g => g.severity === "critical");
+  const highGaps = gaps.filter(g => g.severity === "high");
+  const daysToFieldwork = dayjs(engagement.key_dates.fieldwork_start).diff(dayjs(), "days");
+
+  const blockers: ReadinessBlocker[] = [];
+
+  // Check: critical gaps with insufficient time
+  for (const gap of criticalGaps) {
+    const estimatedFixDays = estimateRemediationDays(gap);
+    if (estimatedFixDays > daysToFieldwork - 14) {  // Need 2 weeks buffer
+      blockers.push({
+        type: "critical_gap_insufficient_time",
+        gap_id: gap.id,
+        description: `Critical gap "${gap.title}" needs ~${estimatedFixDays} days to fix. Only ${daysToFieldwork} days to fieldwork.`,
+        recommendation: "postpone",
+      });
+    }
+  }
+
+  // Check: observation period coverage
+  const observationMonths = dayjs(engagement.observation_period_end)
+    .diff(dayjs(engagement.observation_period_start), "months");
+  if (observationMonths < 3) {
+    blockers.push({
+      type: "observation_period_too_short",
+      description: `Observation period is ${observationMonths} months. Minimum recommended is 6 months.`,
+      recommendation: "postpone",
+    });
+  }
+
+  // Check: evidence coverage
+  const controlsWithEvidence = new Set(evidence.map(e => e.control_id));
+  const controlsWithoutEvidence = controls
+    .filter(c => c.applicability === "applicable" && !controlsWithEvidence.has(c.control_id));
+  if (controlsWithoutEvidence.length > controls.length * 0.3) {
+    blockers.push({
+      type: "insufficient_evidence",
+      description: `${controlsWithoutEvidence.length}/${controls.length} applicable controls have no evidence collected.`,
+      recommendation: "delay_fieldwork",
+    });
+  }
+
+  const readiness = blockers.length === 0 ? "ready"
+    : blockers.some(b => b.recommendation === "postpone") ? "not_ready"
+    : "at_risk";
+
+  return {
+    readiness,
+    blockers,
+    critical_gaps_open: criticalGaps.length,
+    high_gaps_open: highGaps.length,
+    evidence_coverage: `${controlsWithEvidence.size}/${controls.filter(c => c.applicability === "applicable").length}`,
+    days_to_fieldwork: daysToFieldwork,
+    recommendation: readiness === "not_ready"
+      ? "Recommend postponing audit start. See blockers above."
+      : readiness === "at_risk"
+      ? "Proceed with caution. Address blockers before fieldwork."
+      : "Audit-ready. Proceed with scheduled fieldwork.",
+  };
+}
+```
+
+### 11.4 Error Handling & Failure Modes
+
+| Failure | Detection | Agent Response |
+|---------|-----------|---------------|
+| **MCP call fails (timeout/auth)** | HTTP error or timeout from MCP server | Retry once after 30s. If still fails, log the failure, mark evidence as "collection_failed", fall back to semi-automated (provide manual export instructions to user). NEVER skip the control. |
+| **MCP returns partial data** | Response truncated, pagination incomplete, rate limit hit | Detect via expected vs actual record count. Retry with smaller date range or pagination. Log partial collection with coverage notes. Alert user: "Only 60% of access logs retrieved — API rate limited. Will retry in 1 hour." |
+| **Conflicting evidence** | Okta says user has MFA, AWS IAM says no MFA condition on policy | Flag as "evidence_conflict". Present both pieces to user: "Okta reports MFA enabled for user X, but AWS IAM policy doesn't require MFA condition. Which is the source of truth? Both need to be aligned for CC6.1." |
+| **Evidence covers wrong date range** | Collected evidence dated outside observation period | Auto-reject and re-collect with correct date parameters. If source system doesn't support date filtering, collect full range and annotate which portion is relevant. |
+| **Stale evidence** | Evidence was collected 45+ days ago, systems may have changed | Mark as "stale" in manifest. Auto-trigger refresh if MCP is available. Alert: "IAM policy evidence collected 52 days ago. Systems may have changed. Refreshing now." |
+| **Source system decommissioned** | MCP call returns 404 or "resource not found" | Flag: "Source system for [evidence] is no longer available. If the system was migrated, update MCP config. If decommissioned, document the change and collect equivalent evidence from new system." |
+| **User uploads wrong file** | Uploaded file doesn't match expected format/content | Validate upload against expected schema. "You uploaded an S3 bucket list, but this control requires IAM policy documents. Please upload the correct file." |
+| **Auditor rejects evidence** | Evidence submitted but auditor marks as insufficient | Parse auditor feedback, map to specific gaps in evidence. Create targeted re-collection task with auditor's specific requirements. "Auditor rejected PBC-003: needs PR approval screenshots, not just merge logs." |
+
+```typescript
+// Resilient evidence collection with retry and fallback
+async function collectEvidenceResilient(
+  controlId: string,
+  evidenceReq: EvidenceRequirement,
+  engagementId: string,
+): Promise<CollectionResult> {
+  const maxRetries = 2;
+  const retryDelayMs = 30000;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      // Attempt automated collection via MCP
+      const result = await mcpClient.callTool(
+        evidenceReq.mcp_server,
+        evidenceReq.mcp_tool,
+        {
+          ...evidenceReq.mcp_params,
+          date_from: engagement.observation_period_start,
+          date_to: engagement.observation_period_end,
+        },
+        { timeout: 60000 }  // 60s timeout
+      );
+
+      // Validate the result
+      const validation = validateEvidence(result, evidenceReq, engagement);
+      if (validation.issues.length > 0) {
+        await logCollectionIssue(controlId, validation.issues);
+      }
+
+      // Hash and store
+      const hash = crypto.createHash("sha256").update(JSON.stringify(result)).digest("hex");
+      const artifact = await storeEvidence({
+        engagement_id: engagementId,
+        control_id: controlId,
+        title: evidenceReq.description,
+        source_system: evidenceReq.source_system,
+        collection_method: "automated",
+        content: result,
+        file_hash: hash,
+        collected_by: "agent:evidence-agent",
+        valid_from: engagement.observation_period_start,
+        valid_to: engagement.observation_period_end,
+        validation_status: validation.issues.length === 0 ? "valid" : "needs_review",
+        validation_notes: validation.issues.join("; "),
+      });
+
+      return { success: true, artifact, attempt };
+
+    } catch (error) {
+      if (attempt < maxRetries) {
+        await logRetry(controlId, evidenceReq, error, attempt + 1);
+        await sleep(retryDelayMs);
+        continue;
+      }
+
+      // All retries exhausted — fall back to semi-automated
+      await logCollectionFailure(controlId, evidenceReq, error);
+      return {
+        success: false,
+        fallback: "semi_automated",
+        instructions: generateManualExportInstructions(evidenceReq),
+        error: error.message,
+      };
+    }
+  }
+}
+```
+
+---
+
+## 12. Configuration Examples
+
+### 12.1 Business Context — SaaS Startup (30 people)
+
+```json
+{
+  "company_name": "BuildTrack",
+  "industry": "Construction SaaS",
+  "product_description": "Project management platform for construction companies",
+  "employee_count": 30,
+  "engineering_team_size": 12,
+  "data_types_handled": ["pii", "proprietary"],
+  "customer_segments": ["Enterprise", "SMB"],
+  "geographic_regions": ["US"],
+  "cloud_providers": ["aws"],
+  "hosting_model": "cloud_native",
+  "key_services": ["ECS", "RDS", "S3", "CloudFront", "Lambda"],
+  "environments": ["production", "staging", "development"],
+  "ci_cd_tools": ["GitHub Actions"],
+  "monitoring_tools": ["CloudWatch", "PagerDuty"],
+  "identity_provider": "Okta",
+  "mfa_enforced": true,
+  "sso_configured": true,
+  "previous_soc2": false,
+  "other_certifications": [],
+  "existing_policies": ["Acceptable Use Policy"],
+  "target_criteria": ["security", "availability", "confidentiality"],
+  "target_audit_type": "type_ii",
+  "desired_audit_period": {
+    "start": "2026-01-01",
+    "end": "2026-06-30"
+  }
+}
+```
+
+### 12.2 Business Context — Healthcare SaaS (100 people)
+
+```json
+{
+  "company_name": "MedFlow",
+  "industry": "Healthcare SaaS",
+  "product_description": "Patient engagement and appointment scheduling platform for hospitals",
+  "employee_count": 100,
+  "engineering_team_size": 35,
+  "data_types_handled": ["pii", "phi"],
+  "customer_segments": ["Enterprise"],
+  "geographic_regions": ["US", "EU"],
+  "cloud_providers": ["aws"],
+  "hosting_model": "cloud_native",
+  "key_services": ["EKS", "RDS", "S3", "ElastiCache", "SQS", "Lambda"],
+  "environments": ["production", "staging", "development", "dr"],
+  "ci_cd_tools": ["GitHub Actions", "ArgoCD"],
+  "monitoring_tools": ["Datadog", "PagerDuty", "Sentry"],
+  "identity_provider": "Okta",
+  "mfa_enforced": true,
+  "sso_configured": true,
+  "previous_soc2": true,
+  "previous_audit_type": "type_ii",
+  "other_certifications": ["HIPAA", "ISO 27001"],
+  "existing_policies": [
+    "Information Security Policy", "Access Control Policy", "Incident Response Plan",
+    "Change Management Policy", "Data Classification Policy", "Encryption Policy",
+    "Business Continuity Plan", "Vendor Management Policy", "Privacy Policy"
+  ],
+  "target_criteria": ["security", "availability", "confidentiality", "privacy"],
+  "target_audit_type": "type_ii",
+  "desired_audit_period": {
+    "start": "2026-01-01",
+    "end": "2026-12-31"
+  },
+  "preferred_auditor": "Schellman"
+}
+```
+
+### 12.3 MCP Server Configuration
+
+```json
+{
+  "mcp_servers": {
+    "aws": {
+      "server_type": "cloud_provider",
+      "display_name": "AWS Production Account",
+      "connection": {
+        "auth_method": "iam_role",
+        "role_arn": "arn:aws:iam::123456789012:role/SOC2AgentReadRole",
+        "external_id": "soc2-agent-UNIQUE-ID",
+        "regions": ["us-east-1", "us-west-2"]
+      },
+      "capabilities": [
+        "iam_policies", "cloudtrail_status", "encryption_config",
+        "security_groups", "backup_config", "vpc_flow_logs", "config_compliance"
+      ],
+      "controls_supported": [
+        "CC6.1", "CC6.2", "CC6.3", "CC6.6", "CC6.7",
+        "CC7.1", "CC7.2", "CC4.1", "CC5.2",
+        "A1.2", "A1.3"
+      ]
+    },
+    "github": {
+      "server_type": "scm",
+      "display_name": "GitHub Organization",
+      "connection": {
+        "auth_method": "oauth2",
+        "org_name": "buildtrack-inc",
+        "credentials_secret_id": "arn:aws:secretsmanager:us-east-1:123456789012:secret:soc2/github-token"
+      },
+      "capabilities": [
+        "branch_protection", "pr_history", "org_security",
+        "ci_cd_config", "dependabot_alerts"
+      ],
+      "controls_supported": ["CC8.1", "CC7.2", "CC7.3", "CC6.1", "CC6.3"]
+    },
+    "okta": {
+      "server_type": "identity_provider",
+      "display_name": "Okta",
+      "connection": {
+        "auth_method": "api_key",
+        "domain": "buildtrack.okta.com",
+        "credentials_secret_id": "arn:aws:secretsmanager:us-east-1:123456789012:secret:soc2/okta-api-key"
+      },
+      "capabilities": [
+        "mfa_enrollment", "sso_config", "provisioning_logs",
+        "access_policies", "admin_roles"
+      ],
+      "controls_supported": ["CC6.1", "CC6.2", "CC6.3", "CC6.6"]
+    },
+    "jira": {
+      "server_type": "project_management",
+      "display_name": "Jira Cloud",
+      "connection": {
+        "auth_method": "api_key",
+        "url": "https://buildtrack.atlassian.net",
+        "credentials_secret_id": "arn:aws:secretsmanager:us-east-1:123456789012:secret:soc2/jira-api-key"
+      },
+      "capabilities": [
+        "change_tickets", "incident_tickets", "risk_register"
+      ],
+      "controls_supported": ["CC8.1", "CC7.2", "CC7.3", "CC7.4", "CC7.5", "CC3.1"]
+    }
+  },
+  "monitoring_schedule": {
+    "daily": {
+      "cron": "0 6 * * *",
+      "checks": ["access_control", "change_management", "logging_status", "backup_status"]
+    },
+    "weekly": {
+      "cron": "0 6 * * 1",
+      "checks": ["encryption_config", "training_completion", "certificate_expiry"]
+    },
+    "monthly": {
+      "cron": "0 6 1 * *",
+      "checks": ["vendor_risk_review", "policy_review_dates", "full_posture_scan"]
+    }
+  }
+}
+```
+
+### 12.4 Sample Control Matrix Entry
+
+```json
+{
+  "control_id": "CC6.1",
+  "tsc_criteria": "security",
+  "control_area": "Logical & Physical Access",
+  "control_description": "The entity implements logical access security software, infrastructure, and architectures over protected information assets to protect them from security events to meet the entity's objectives.",
+  "control_objective": "Access to systems and data is restricted to authorized users based on business need, using MFA, SSO, and role-based access controls.",
+  "risk_level": "high",
+  "applicability": "applicable",
+  "owner": "DevOps Lead",
+  "status": "evidence_collected",
+  "implementation_guidance": "For BuildTrack: verify Okta MFA enforcement (100% enrollment), AWS IAM policies follow least privilege, GitHub org requires 2FA, no shared credentials, privileged access is logged.",
+  "evidence_requirements": [
+    {
+      "evidence_id": "CC6.1-E1",
+      "description": "AWS IAM policies showing role-based access and least privilege",
+      "source_system": "AWS",
+      "collection_method": "automated",
+      "mcp_tool": "get_iam_policies",
+      "frequency": "point_in_time"
+    },
+    {
+      "evidence_id": "CC6.1-E2",
+      "description": "Okta MFA enrollment report showing 100% enrollment",
+      "source_system": "Okta",
+      "collection_method": "automated",
+      "mcp_tool": "get_mfa_enrollment",
+      "frequency": "point_in_time"
+    },
+    {
+      "evidence_id": "CC6.1-E3",
+      "description": "GitHub organization security settings showing 2FA requirement",
+      "source_system": "GitHub",
+      "collection_method": "automated",
+      "mcp_tool": "get_org_security",
+      "frequency": "point_in_time"
+    },
+    {
+      "evidence_id": "CC6.1-E4",
+      "description": "Quarterly access review documentation",
+      "source_system": "Manual",
+      "collection_method": "manual",
+      "frequency": "periodic",
+      "notes": "Upload access review meeting notes and action items for each quarter in the observation period"
+    }
+  ]
+}
+```
+
+---
+
+## 13. AWS Infrastructure Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -1889,7 +2634,7 @@ interface AgentSessionDDB {
 
 ---
 
-## 12. Development Roadmap
+## 14. Development Roadmap
 
 ### Phase 1: Foundation (Weeks 1-4)
 | Task | Details |
@@ -1938,7 +2683,7 @@ interface AgentSessionDDB {
 
 ---
 
-## 13. Cost Estimates
+## 15. Cost Estimates
 
 ### Claude API Costs (per engagement)
 
@@ -1969,7 +2714,7 @@ interface AgentSessionDDB {
 
 ---
 
-## 14. Getting Started — Quick Setup
+## 16. Getting Started — Quick Setup
 
 ```bash
 # 1. Clone and install
@@ -2010,7 +2755,7 @@ npm run agent:start
 
 ---
 
-## 15. Key SOC 2 References
+## 17. Key SOC 2 References
 
 | Resource | URL/Reference |
 |----------|--------------|
@@ -2023,7 +2768,7 @@ npm run agent:start
 
 ---
 
-## 16. References
+## 18. References
 
 - Anthropic Claude Agent SDK documentation
 - AICPA Trust Services Criteria (2017 framework with 2022 revisions)
