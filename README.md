@@ -34,6 +34,12 @@ Research documents and specifications for building production-grade AI agents us
 | [Vendor Onboarding Agent (India)](vendor-onboarding-agent-spec.md) | Handles end-to-end vendor onboarding for Indian businesses — document collection, government API validation (GSTIN, PAN, Udyam, MCA, Bank), compliance screening, risk scoring, approval workflows, and ERP master creation. |
 | [Cloud Cost Optimization Agent (AWS)](cloud-cost-optimization-agent-spec.md) | Investigates cost spikes, detects and cleans up waste, rightsizes instances with auto-rollback, optimizes Savings Plans, schedules dev/staging environments, and analyzes data transfer costs — across AWS Organizations with tiered autonomy. The agent that executes, not just recommends. |
 
+### Real Estate
+
+| Agent | Description |
+|-------|-------------|
+| [Real Estate Transaction Agent (Gujarat)](real-estate-transaction-agent-spec.md) | End-to-end property purchase companion for Gujarat — browser automation for 6 government portals (AnyRoR, Gujarat RERA, eCourts, GARVI, SMC, GSTN), due diligence with dispute search, builder agreement review, total cost breakdown (jantri vs market rate), stamp duty calculation, registration guide, and immutable purchase dossier with timestamped evidence. |
+
 ### Personal / Finance
 
 | Agent | Description |
