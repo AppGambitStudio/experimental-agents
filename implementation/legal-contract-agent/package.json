@@ -8,6 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "analyze": "tsx src/cli.ts",
     "copilot": "tsx src/copilot-cli.ts",
+    "test-tools": "tsx src/test-tools.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc"
   },
