@@ -1,0 +1,31 @@
+{
+  "name": "legal-contract-agent",
+  "version": "0.1.0",
+  "description": "AI-powered Indian contract review agent — flags risks against Indian law, generates negotiation playbooks, tracks versions",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "analyze": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "keywords": [
+    "ai-agent",
+    "contract-review",
+    "indian-law",
+    "claude-agent-sdk",
+    "legal-tech"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.84",
+    "@types/node": "^25.5.0",
+    "@types/pdf-parse": "^1.1.5",
+    "dotenv": "^17.3.1",
+    "pdf-parse": "^2.4.5",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2",
+    "zod": "^4.3.6"
+  }
+}
