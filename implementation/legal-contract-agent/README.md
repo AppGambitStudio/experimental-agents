@@ -124,9 +124,18 @@ The agent uses 3 in-process MCP servers built with `createSdkMcpServer()`:
 | `legal-kb-mcp` | `search_clause_patterns`, `get_required_clauses`, `get_stamp_duty`, `check_enforceability` | Indian law knowledge base |
 | `contract-mcp` | `create_contract`, `add_version`, `store_analysis`, `get_previous_analysis`, `get_contract_timeline` | Contract repository and version tracking |
 
-### Knowledge Base (Prototype)
+### Knowledge Base
 
-For this prototype, the knowledge base is hardcoded in TypeScript. In production, this would move to PostgreSQL + pgvector for semantic search.
+The knowledge base drives the agent's Indian law intelligence. Currently hardcoded in TypeScript for the prototype, designed to be extended to a database + vector store in production.
+
+**Current (Prototype) — Hardcoded in TypeScript:**
+
+| Data | Location | Count |
+|------|----------|-------|
+| Clause risk patterns | `src/knowledge-base/clause-patterns.ts` | 10 patterns |
+| Stamp duty rates | `src/knowledge-base/stamp-duty.ts` | 4 states |
+| Enforceability rules | `src/mcp-servers/legal-kb-mcp.ts` | 5 clause types |
+| Required clauses per type | `src/mcp-servers/legal-kb-mcp.ts` | 5 contract types |
 
 **Clause patterns (10):**
 
@@ -146,6 +155,70 @@ For this prototype, the knowledge base is hardcoded in TypeScript. In production
 **Stamp duty rates:** Gujarat, Maharashtra, Delhi, Karnataka across multiple document types.
 
 **Enforceability rules:** Non-compete, moral rights waiver, penalty clauses, non-solicitation, arbitration.
+
+### Extending the Knowledge Base
+
+The knowledge base is designed to scale from hardcoded TypeScript to a full database + vector store. Here's the migration path:
+
+**Phase 1 (Current): Static TypeScript files**
+- Quick to iterate, easy to read and debug
+- Limited to what's hardcoded — 10 patterns, 4 states
+- Good for prototype and validation
+
+**Phase 2: JSON/YAML config files**
+- Move clause patterns, stamp duty, and enforceability rules to JSON files
+- Editable without code changes — legal team can update patterns directly
+- Load at startup: `const patterns = JSON.parse(readFileSync("./data/clause-patterns.json"))`
+
+**Phase 3: PostgreSQL + pgvector (Production)**
+- Full semantic search — agent finds relevant patterns even when clause wording is different
+- Schema defined in the [agent spec](../../legal-contract-intelligence-agent-spec.md#4-legal-knowledge-base-postgresql--pgvector):
+
+```
+┌─────────────────────────────────────────────────┐
+│  Layer 1: legal_statutes                        │
+│  ~500-800 sections across 20 Indian acts        │
+│  + embeddings for vector search                 │
+├─────────────────────────────────────────────────┤
+│  Layer 2: clause_patterns                       │
+│  ~200-400 risk patterns with embeddings         │
+│  + suggested alternatives + negotiation points  │
+├─────────────────────────────────────────────────┤
+│  Layer 3: stamp_duty_matrix                     │
+│  30 states × 20 document types = ~600 entries   │
+├─────────────────────────────────────────────────┤
+│  Layer 4: legal_precedents                      │
+│  ~100-200 landmark SC/HC judgments              │
+│  + embeddings for semantic case search          │
+└─────────────────────────────────────────────────┘
+```
+
+To migrate `legal-kb-mcp` to PostgreSQL + pgvector:
+
+1. Replace the hardcoded keyword matching in `search_clause_patterns` with:
+   ```typescript
+   // Current: keyword matching
+   const matches = CLAUSE_PATTERNS.filter(p => keywords.some(kw => text.includes(kw)));
+
+   // Production: vector similarity search
+   const embedding = await openai.embeddings.create({ model: "text-embedding-3-small", input: clauseText });
+   const matches = await db.query(`
+     SELECT *, 1 - (embedding <=> $1::vector) AS similarity
+     FROM clause_patterns
+     WHERE similarity > 0.7
+     ORDER BY similarity DESC LIMIT 5
+   `, [embedding]);
+   ```
+
+2. Replace the hardcoded stamp duty arrays with database queries
+3. Add the `legal_statutes` and `legal_precedents` tables for full Indian law coverage
+4. The MCP tool interfaces stay the same — only the handler implementations change
+
+**Data sources for seeding the production KB:**
+- Indian statutes: [India Code](https://indiacode.nic.in/) (all central acts)
+- Precedents: [Indian Kanoon](https://indiankanoon.org/) (landmark judgments)
+- Stamp duty: State revenue department websites (updated annually)
+- Clause patterns: Curated by a senior Indian corporate lawyer
 
 ## Example Output
 
