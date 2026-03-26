@@ -149,7 +149,7 @@ For this prototype, the knowledge base is hardcoded in TypeScript. In production
 
 ## Example Output
 
-Running against a 24-page MSA (Aumni Health - AppGambit):
+Running against a 24-page MSA (real contract test):
 
 ```
 Risk Score: 73/100 (Grade D — Major Risks)
@@ -197,7 +197,7 @@ console.log(result);
 
 ## Cost
 
-Each analysis costs approximately ₹50-150 depending on contract length (10-50 pages). The Aumni MSA analysis (24 pages, 12 tool calls) cost ~$0.08.
+Each analysis costs approximately ₹50-150 depending on contract length (10-50 pages). A 24-page MSA test (12 tool calls) cost ~$0.08.
 
 ## Spec
 
