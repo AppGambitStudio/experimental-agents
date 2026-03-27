@@ -10,7 +10,8 @@ import { calculateTotalCost, formatCostBreakdown } from "../knowledge-base/total
 import { getRegistrationGuide } from "../knowledge-base/registration-guide.js";
 import { getPostPurchaseChecklist } from "../knowledge-base/post-purchase.js";
 import { getConstraintsForPhase, formatConstraintsDisclaimer } from "../knowledge-base/negative-constraints.js";
-import type { PropertyType, RedFlag, PurchasePhase } from "../types/index.js";
+import { runCriticReview, formatCriticReview } from "../knowledge-base/critic.js";
+import type { PropertyType, RedFlag, PurchasePhase, VerificationEntry, VerificationStatus } from "../types/index.js";
 
 // Red flag patterns for property verification
 const RED_FLAG_PATTERNS: RedFlag[] = [
@@ -626,6 +627,69 @@ const getVerificationLimitationsTool = tool(
   { annotations: { readOnlyHint: true } }
 );
 
+const reviewReportTool = tool(
+  "review_report",
+  "Critic / Reflection tool — acts as a 'Senior Property Lawyer' reviewing the due diligence report BEFORE presenting to the buyer. Checks for: cross-portal consistency, coverage gaps, hallucinated claims, risk rating accuracy, financial completeness, and missing disclaimers. Returns a structured review with APPROVED/REVISE verdict, quality scores, and specific issues to fix. ALWAYS call this before presenting a final summary or dossier to the buyer.",
+  {
+    report_content: z
+      .string()
+      .describe("The full text of the due diligence report or summary you are about to present to the buyer"),
+    verifications: z
+      .array(
+        z.object({
+          id: z.string(),
+          purchaseId: z.string(),
+          timestamp: z.string(),
+          portal: z.string(),
+          action: z.string(),
+          query: z.string(),
+          result: z.string(),
+          status: z.enum(["verified", "unverified", "failed", "partial", "not_checked"]),
+          screenshotPath: z.string().optional(),
+          notes: z.string().optional(),
+        })
+      )
+      .describe("Array of verification entries from get_verification_log — pass the full log here"),
+    phase: z
+      .enum(["due_diligence", "document_review", "financial_analysis", "registration", "post_purchase"])
+      .describe("Current purchase phase"),
+  },
+  async ({ report_content, verifications, phase }) => {
+    const typedVerifications: VerificationEntry[] = verifications.map((v) => ({
+      ...v,
+      status: v.status as VerificationStatus,
+    }));
+
+    const review = runCriticReview(report_content, typedVerifications, phase as PurchasePhase);
+    const formatted = formatCriticReview(review);
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            verdict: review.verdict,
+            overall_quality: review.overallQuality,
+            coverage_score: review.coverageScore,
+            consistency_score: review.consistencyScore,
+            completeness_score: review.completenessScore,
+            total_issues: review.totalIssues,
+            critical_issues: review.criticalIssues,
+            major_issues: review.majorIssues,
+            minor_issues: review.minorIssues,
+            issues: review.issues,
+            formatted_review: formatted,
+            instructions: review.verdict === "REVISE"
+              ? "REVISE the report to address the issues listed above, then call review_report again. Max 2 revision rounds."
+              : "Report is APPROVED. Present it to the buyer with confidence.",
+          }),
+        },
+      ],
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
 export const propertyKbMcp = createSdkMcpServer({
   name: "property-kb-mcp",
   tools: [
@@ -637,5 +701,6 @@ export const propertyKbMcp = createSdkMcpServer({
     getRegistrationGuideTool,
     getPostPurchaseChecklistTool,
     getVerificationLimitationsTool,
+    reviewReportTool,
   ],
 });

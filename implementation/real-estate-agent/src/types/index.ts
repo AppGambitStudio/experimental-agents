@@ -178,3 +178,43 @@ export interface ChecklistItem {
   completedAt?: string;
   notes?: string;
 }
+
+// Critic / Reflection types
+
+export type CriticVerdict = "APPROVED" | "REVISE";
+
+export type IssueCategory =
+  | "cross_portal_inconsistency"
+  | "coverage_gap"
+  | "unsupported_claim"
+  | "risk_rating_mismatch"
+  | "financial_incomplete"
+  | "missing_disclaimer"
+  | "stale_data"
+  | "logical_contradiction";
+
+export type IssueSeverity = "critical" | "major" | "minor";
+
+export interface CriticIssue {
+  id: string;
+  category: IssueCategory;
+  severity: IssueSeverity;
+  finding: string;
+  evidence: string;
+  suggestedFix: string;
+}
+
+export interface CriticReview {
+  verdict: CriticVerdict;
+  reviewedAt: string;
+  totalIssues: number;
+  criticalIssues: number;
+  majorIssues: number;
+  minorIssues: number;
+  issues: CriticIssue[];
+  coverageScore: number;
+  consistencyScore: number;
+  completenessScore: number;
+  overallQuality: number;
+  summary: string;
+}

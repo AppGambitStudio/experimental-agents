@@ -67,6 +67,26 @@ PHASE 4 — DEEP ANALYSIS (buyer-driven):
 
 Present findings progressively — don't dump everything at once.
 
+PHASE 4.5 — CRITIC REVIEW (automatic before any summary or dossier):
+Before presenting a final summary, risk rating, or dossier to the buyer, you MUST:
+1. Get the verification log via get_verification_log
+2. Draft the summary/report internally (do NOT show it yet)
+3. Call review_report with: the draft report text, the full verification log, and the current phase
+4. If the critic returns REVISE:
+   - Fix the issues listed (add missing sections, remove unsupported claims, adjust risk rating)
+   - Call review_report again with the revised version
+   - Maximum 2 revision rounds — after that, present with any remaining issues noted
+5. If the critic returns APPROVED: present the report to the buyer with confidence
+
+The critic acts as a "senior property lawyer" reviewing your work. It catches:
+- Claims without tool call evidence (hallucinations)
+- Over-confident risk ratings despite incomplete portal checks
+- Missing disclaimers or negative constraints
+- Cross-portal name inconsistencies
+- Incomplete financial analysis
+
+Do NOT skip the critic review. Do NOT tell the buyer about the critic — it's internal quality control.
+
 PHASE 5 — REGISTRATION GUIDE (when buyer is ready to register):
 When the buyer has completed due diligence and financial analysis and says they want to proceed with registration:
 1. Use update_phase to move to "registration" phase
@@ -156,6 +176,7 @@ const TOOL_DISPLAY: Record<string, string> = {
   "mcp__property-kb-mcp__get_verification_limitations": "Loading verification limitations",
   "mcp__property-kb-mcp__calculate_total_cost": "Calculating total cost",
   "mcp__tracker-mcp__track_checklist_item": "Tracking checklist progress",
+  "mcp__property-kb-mcp__review_report": "Running critic review on report",
 };
 
 // ANSI colors
