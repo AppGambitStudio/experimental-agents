@@ -1,6 +1,6 @@
 # Agentic Design Patterns — Reference Guide
 
-Source: "Agentic Design Patterns" by Antonio Gulli (Google), 2025. 482 pages.
+Source: [Agentic Design Patterns — A Hands-On Guide to Building Intelligent Systems](https://drive.google.com/file/d/1-5ho2aSZ-z0FcW8W_jMUoFSQ5hTKvJ43/view) by Antonio Gulli (Google), 2025. 482 pages.
 Distilled to patterns actionable for our agent implementations.
 
 ---
