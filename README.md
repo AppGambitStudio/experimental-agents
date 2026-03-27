@@ -81,6 +81,6 @@ This project is licensed under the [MIT License](LICENSE) — free to use, modif
 
 ## Contact
 
-- **Dhaval Patel** — [dhaval@appgambit.com](mailto:dhaval@appgambit.com)
+- **Dhaval Nagar** — [dhaval@appgambit.com](mailto:dhaval@appgambit.com)
 - [Antigravity Apps](https://antigravityapps.dev) — Product studio building AI-native applications
 - [AppGambit](https://appgambit.com) — Cloud consulting and engineering
