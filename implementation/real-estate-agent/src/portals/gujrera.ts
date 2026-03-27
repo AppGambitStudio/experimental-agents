@@ -80,7 +80,7 @@ await new Promise(r => setTimeout(r, 8000));
 // Step 4: Take screenshot of results
 try {
   const buf = await page.screenshot({ fullPage: true });
-  await saveScreenshot(buf, "${screenshotDir}/01-search-results.png");
+  await saveScreenshot(buf, "rera-01-search-results.png");
 } catch(e) {}
 
 // Step 5: Extract results text
@@ -91,7 +91,7 @@ console.log("__RESULT_START__" + JSON.stringify({
   url: url,
   searchTerm: '${safeQuery}',
   pageText: text,
-  screenshots: ["${screenshotDir}/01-search-results.png"]
+  screenshots: ["rera-01-search-results.png"]
 }) + "__RESULT_END__");
 `;
 
@@ -100,7 +100,7 @@ console.log("__RESULT_START__" + JSON.stringify({
 
     // Collect screenshots from dev-browser sandbox to our output dir
     const savedScreenshots = collectScreenshots(
-      ["01-search-results.png"],
+      ["rera-01-search-results.png"],
       screenshotDir
     );
 
@@ -222,7 +222,7 @@ await new Promise(r => setTimeout(r, 8000));
 // Take screenshot of detail page
 try {
   const buf = await page.screenshot({ fullPage: true });
-  await saveScreenshot(buf, "${screenshotDir}/02-project-details.png");
+  await saveScreenshot(buf, "rera-02-project-details.png");
 } catch(e) {}
 
 // Extract full page text
@@ -233,7 +233,7 @@ console.log("__RESULT_START__" + JSON.stringify({
   url: url,
   reraId: '${safeQuery}',
   pageText: text,
-  screenshots: ["${screenshotDir}/02-project-details.png"]
+  screenshots: ["rera-02-project-details.png"]
 }) + "__RESULT_END__");
 `;
 
@@ -242,7 +242,7 @@ console.log("__RESULT_START__" + JSON.stringify({
 
     // Collect screenshots from dev-browser sandbox
     const savedScreenshots = collectScreenshots(
-      ["02-project-details.png"],
+      ["rera-02-project-details.png"],
       screenshotDir
     );
 
