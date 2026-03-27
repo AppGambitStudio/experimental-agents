@@ -1,0 +1,298 @@
+// Interactive Copilot Mode — conversational property verification
+// Uses SDK sessions for multi-turn persistence and interactive questioning
+
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import { browserMcp } from "./mcp-servers/browser-mcp.js";
+import { propertyKbMcp } from "./mcp-servers/property-kb-mcp.js";
+import { trackerMcp } from "./mcp-servers/tracker-mcp.js";
+import { createInterface } from "readline";
+
+const COPILOT_SYSTEM_PROMPT = `You are a Real Estate Transaction Copilot specializing in Gujarat property verification.
+You work INTERACTIVELY with the buyer — this is a conversation, not a one-shot report.
+
+YOUR PERSONALITY:
+- You're a sharp, experienced Gujarat property consultant who explains things in plain language
+- You're conversational — ask questions, confirm understanding, dig deeper
+- You celebrate when something looks good ("RERA registration is current, expiry in 2027 — that's solid")
+- You're direct about risks ("No RERA registration found. This is a deal-breaker.")
+- You adapt to the buyer's expertise — if they seem knowledgeable, go deeper; if not, simplify
+- You use Indian English naturally ("lakh", "crore", "stamp duty", "jantri")
+
+YOUR INTERACTIVE WORKFLOW:
+
+PHASE 1 — INTAKE (first message):
+When the buyer provides property details, start by:
+1. Create a purchase record using create_purchase
+2. Give a QUICK overview (30 seconds to read):
+   - Property type, location, budget
+   - First impression based on what you know
+3. Ask 2-3 contextual questions:
+   - "Is this a new construction or resale?"
+   - "What's your primary concern — builder reliability, legal clearance, or pricing?"
+   - "Do you have any existing relationship with the builder?"
+
+PHASE 2 — RERA VERIFICATION (after buyer responds):
+Based on buyer's answers, start verification:
+1. Search RERA portal via search_rera_project
+2. Get project details via get_rera_project_details
+3. Log each step via log_verification
+
+Present RERA findings and PAUSE for buyer reaction:
+- "Here's what I found on GujRERA. The project is registered, expires March 2027, 3 complaints filed."
+- "Want me to dig into those complaints, or shall I move to the financial analysis?"
+
+PHASE 3 — DEEP ANALYSIS (buyer-driven):
+Based on buyer's priorities:
+1. Check red flags via check_red_flags
+2. Calculate stamp duty via calculate_stamp_duty
+3. Look up jantri rate via get_jantri_rate
+4. Get document checklist via get_required_documents
+
+Present findings progressively — don't dump everything at once.
+
+PHASE 4 — BUYER SUPPORT:
+The buyer may ask:
+- "What documents should I collect?"
+- "Is the stamp duty different if my wife's name is first?"
+- "How does this builder's track record look?"
+- "What should I check during the site visit?"
+- "Is the price fair for this area?"
+
+Answer conversationally, backed by tool results.
+
+CRITICAL RULES:
+- NEVER provide definitive legal or investment advice
+- ALWAYS include the disclaimer when giving final outputs
+- Be DIRECT about critical red flags
+- Be TRANSPARENT when portal data is unavailable
+- Use plain language — the buyer may be buying their first home
+- Keep responses focused — don't write 500 words when 100 will do in conversation mode
+
+ANTI-HALLUCINATION RULES:
+- ONLY cite information that comes from tool results
+- If a tool call fails, say "Could not verify" instead of making up results
+- Every fact must be traceable to a specific tool call
+- When uncertain, say "I don't know" rather than guessing
+
+COMMUNICATION:
+- Format amounts as Rs X,XX,XXX (Indian numbering)
+- Use bullet points for clarity
+- Bold key findings
+- Keep each response under 300 words unless the buyer asks for detail`;
+
+// Tool name display mapping
+const TOOL_DISPLAY: Record<string, string> = {
+  "mcp__browser-mcp__search_rera_project": "Searching GujRERA portal",
+  "mcp__browser-mcp__get_rera_project_details": "Fetching RERA project details",
+  "mcp__browser-mcp__take_portal_screenshot": "Taking portal screenshot",
+  "mcp__property-kb-mcp__get_jantri_rate": "Looking up jantri rate",
+  "mcp__property-kb-mcp__calculate_stamp_duty": "Calculating stamp duty",
+  "mcp__property-kb-mcp__check_red_flags": "Checking red flag patterns",
+  "mcp__property-kb-mcp__get_required_documents": "Getting document checklist",
+  "mcp__tracker-mcp__create_purchase": "Registering purchase",
+  "mcp__tracker-mcp__log_verification": "Logging verification step",
+  "mcp__tracker-mcp__get_verification_log": "Loading verification log",
+  "mcp__tracker-mcp__update_phase": "Updating purchase phase",
+  "mcp__tracker-mcp__get_purchase_summary": "Getting purchase summary",
+};
+
+// ANSI colors
+const c = {
+  reset: "\x1b[0m",
+  dim: "\x1b[2m",
+  bold: "\x1b[1m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  blue: "\x1b[34m",
+  magenta: "\x1b[35m",
+  cyan: "\x1b[36m",
+  red: "\x1b[31m",
+};
+
+export interface CopilotOptions {
+  reraId?: string;
+  address: string;
+  builderName?: string;
+  propertyType: string;
+  budget: number;
+  state: string;
+}
+
+export async function startCopilot(options: CopilotOptions): Promise<void> {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  const askUser = (prompt: string): Promise<string> =>
+    new Promise((resolve) => {
+      rl.question(`${c.cyan}${c.bold}You: ${c.reset}`, (answer) => {
+        resolve(answer.trim());
+      });
+    });
+
+  const shortAddress = options.address.slice(0, 40);
+  console.log(`
+${c.cyan}${c.bold}+--------------------------------------------------------------+
+|  Real Estate Transaction Copilot — Interactive Mode          |
+|  Property: ${shortAddress.padEnd(47)}|
+|  Commands: summary, red-flags, documents, quit               |
++--------------------------------------------------------------+${c.reset}
+`);
+
+  // Build the initial prompt
+  const initialPrompt = `The buyer wants to verify a property interactively. Here are the details:
+
+- Address: ${options.address}
+${options.reraId ? `- RERA ID: ${options.reraId}` : "- RERA ID: not provided yet"}
+${options.builderName ? `- Builder: ${options.builderName}` : "- Builder: not provided yet"}
+- Property type: ${options.propertyType}
+- Budget: Rs ${options.budget.toLocaleString("en-IN")}
+- State: ${options.state}
+
+Start by:
+1. Create a purchase record using create_purchase
+2. Give a quick overview — property details and first impression
+3. Ask the buyer 2-3 contextual questions:
+   - "Is this a new construction or resale?"
+   - "What's your budget?" (confirm the number)
+   - "Primary concern — builder reliability, legal clearance, or pricing?"
+
+Remember: this is a conversation, not a report. Keep the first response concise — overview + questions only.`;
+
+  let sessionId: string | undefined;
+  let turnCount = 0;
+
+  async function runTurn(userMessage: string): Promise<void> {
+    const queryOptions: Parameters<typeof query>[0] = {
+      prompt: userMessage,
+      options: {
+        systemPrompt: COPILOT_SYSTEM_PROMPT,
+        mcpServers: {
+          "browser-mcp": browserMcp,
+          "property-kb-mcp": propertyKbMcp,
+          "tracker-mcp": trackerMcp,
+        },
+        model: "sonnet",
+        permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true,
+        maxTurns: 15,
+        ...(sessionId ? { resume: sessionId } : {}),
+      },
+    };
+
+    let agentResponse = "";
+
+    for await (const message of query(queryOptions)) {
+      // Capture session ID from init
+      if ("type" in message && message.type === "system" && "subtype" in message) {
+        const sysMsg = message as { type: "system"; subtype: string; session_id?: string };
+        if (sysMsg.subtype === "init" && sysMsg.session_id) {
+          sessionId = sysMsg.session_id;
+        }
+      }
+
+      // Show tool calls as progress
+      if ("type" in message && message.type === "assistant" && "message" in message) {
+        const assistantMsg = message as {
+          type: "assistant";
+          message: { content: Array<{ type: string; name?: string; text?: string }> };
+        };
+        const content = assistantMsg.message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === "tool_use" && block.name) {
+              const display = TOOL_DISPLAY[block.name] ?? `Tool: ${block.name.replace(/mcp__[^_]+__/, "")}`;
+              process.stdout.write(`${c.dim}  ${display}...${c.reset}\n`);
+            }
+          }
+        }
+      }
+
+      // Capture final result
+      if ("type" in message && message.type === "result") {
+        const resultMsg = message as {
+          type: "result";
+          subtype: string;
+          result?: string;
+          num_turns?: number;
+          total_cost_usd?: number;
+        };
+        if (resultMsg.subtype === "success" && resultMsg.result) {
+          agentResponse = resultMsg.result;
+        }
+      }
+    }
+
+    turnCount++;
+
+    if (agentResponse) {
+      console.log(`\n${c.magenta}${c.bold}Copilot:${c.reset}\n${agentResponse}\n`);
+    }
+  }
+
+  // Run the initial analysis
+  try {
+    await runTurn(initialPrompt);
+  } catch (error) {
+    console.error(`\n${c.red}Error during initial analysis:${c.reset}`, error);
+    rl.close();
+    return;
+  }
+
+  // Interactive loop
+  while (true) {
+    const userInput = await askUser("");
+
+    if (!userInput) continue;
+
+    if (userInput.toLowerCase() === "quit" || userInput.toLowerCase() === "exit") {
+      console.log(`\n${c.dim}Session ended. ${turnCount} turns.${c.reset}`);
+      if (sessionId) {
+        console.log(`${c.dim}Session ID: ${sessionId} (can be resumed later)${c.reset}`);
+      }
+      break;
+    }
+
+    if (userInput.toLowerCase() === "summary") {
+      try {
+        await runTurn(
+          "Give me a concise summary of all findings so far — overall risk rating, critical items, and top 3 things I should do next."
+        );
+      } catch (error) {
+        console.error(`\n${c.red}Error:${c.reset}`, error);
+      }
+      continue;
+    }
+
+    if (userInput.toLowerCase() === "red-flags") {
+      try {
+        await runTurn(
+          "Run a full red flag check on this property based on everything we've verified so far. Show me all triggered red flags with severity and what I should do about each one."
+        );
+      } catch (error) {
+        console.error(`\n${c.red}Error:${c.reset}`, error);
+      }
+      continue;
+    }
+
+    if (userInput.toLowerCase() === "documents") {
+      try {
+        await runTurn(
+          "Show me the complete document checklist for this property type. Mark which documents we've already verified and which are still pending."
+        );
+      } catch (error) {
+        console.error(`\n${c.red}Error:${c.reset}`, error);
+      }
+      continue;
+    }
+
+    try {
+      await runTurn(userInput);
+    } catch (error) {
+      console.error(`\n${c.red}Error:${c.reset}`, error);
+    }
+  }
+
+  rl.close();
+}
