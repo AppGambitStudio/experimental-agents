@@ -13,6 +13,7 @@ import type { ReraProject } from "../types/index.js";
 import {
   runDevBrowserScript,
   ensureOutputDir,
+  collectScreenshots,
   errorResult,
   successResult,
   type PortalResult,
@@ -96,10 +97,17 @@ console.log("__RESULT_START__" + JSON.stringify({
 
   try {
     const raw = runDevBrowserScript(script, 120);
+
+    // Collect screenshots from dev-browser sandbox to our output dir
+    const savedScreenshots = collectScreenshots(
+      ["01-search-results.png"],
+      screenshotDir
+    );
+
     const parsed = extractJsonResult(raw);
 
     if (!parsed) {
-      return errorResult("Could not parse search results from Gujarat RERA portal");
+      return errorResult("Could not parse search results from Gujarat RERA portal", savedScreenshots);
     }
 
     const pageText = (parsed.pageText as string) || "";
@@ -140,7 +148,7 @@ console.log("__RESULT_START__" + JSON.stringify({
         projects,
         rawText: pageText.substring(0, 2000),
       },
-      (parsed.screenshots as string[]) || []
+      savedScreenshots
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -231,10 +239,17 @@ console.log("__RESULT_START__" + JSON.stringify({
 
   try {
     const raw = runDevBrowserScript(script, 120);
+
+    // Collect screenshots from dev-browser sandbox
+    const savedScreenshots = collectScreenshots(
+      ["02-project-details.png"],
+      screenshotDir
+    );
+
     const parsed = extractJsonResult(raw);
 
     if (!parsed) {
-      return errorResult(`Could not parse project details for RERA ID: ${reraId}`);
+      return errorResult(`Could not parse project details for RERA ID: ${reraId}`, savedScreenshots);
     }
 
     const pageText = (parsed.pageText as string) || "";
@@ -250,7 +265,7 @@ console.log("__RESULT_START__" + JSON.stringify({
         details,
         rawText: pageText.substring(0, 5000),
       },
-      (parsed.screenshots as string[]) || []
+      savedScreenshots
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

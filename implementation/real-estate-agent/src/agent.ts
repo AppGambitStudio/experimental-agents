@@ -71,12 +71,24 @@ YOUR ANALYSIS PROCESS:
    d. Get required documents via get_required_documents for the property type
 10. Generate the comprehensive due diligence dossier
 
-FALLBACK INSTRUCTIONS:
-If any portal tool returns captcha_required or portal_unavailable:
-- Note the limitation clearly in your report
-- Inform the user: "The [portal name] verification could not be completed automatically due to [CAPTCHA/maintenance]. For complete verification, use the interactive copilot mode where Claude Browser MCP can be used as a fallback to navigate the portal manually."
-- Continue with other portal checks — do NOT stop the entire analysis because one portal is unavailable
-- Mark that verification as "unavailable" in the dossier
+FALLBACK INSTRUCTIONS — CLAUDE BROWSER MCP:
+If any portal tool returns captcha_required or portal_unavailable, DO NOT give up.
+Instead, try using Claude Browser MCP (mcp__claude-in-chrome__*) tools as fallback:
+
+1. First call mcp__claude-in-chrome__tabs_context_mcp to check if Chrome extension is connected
+2. If connected:
+   a. Create a new tab: mcp__claude-in-chrome__tabs_create_mcp with the portal URL
+   b. Use mcp__claude-in-chrome__read_page to see the page content
+   c. Use mcp__claude-in-chrome__form_input to fill search forms
+   d. Use mcp__claude-in-chrome__computer to click buttons and solve CAPTCHAs visually
+   e. Use mcp__claude-in-chrome__read_page again to extract results
+   f. Take a screenshot for the dossier
+3. If Chrome extension is NOT connected:
+   - Note the limitation clearly in your report
+   - Inform the user which portals could not be checked and why
+   - Suggest: "Connect the Claude Browser Chrome extension to enable CAPTCHA-protected portal access"
+
+IMPORTANT: Continue with other portal checks regardless — do NOT stop the entire analysis because one portal is unavailable. Mark unverified portals as "not_checked" in the dossier.
 
 YOUR DUE DILIGENCE REPORT SHOULD INCLUDE:
 1. Property Overview — address, type, builder, RERA ID

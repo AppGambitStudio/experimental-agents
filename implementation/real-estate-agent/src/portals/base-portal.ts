@@ -1,9 +1,13 @@
 // Shared browser automation helpers for Gujarat government portal interactions
 // Uses dev-browser (globally installed) for sandboxed browser automation
+//
+// IMPORTANT: dev-browser saves screenshots to ~/.dev-browser/tmp/<name>
+// We must copy them to our output directory after the script runs.
 
 import { execSync } from "child_process";
-import { mkdirSync } from "fs";
-import { resolve } from "path";
+import { mkdirSync, copyFileSync, existsSync, readdirSync } from "fs";
+import { resolve, join } from "path";
+import { homedir } from "os";
 
 export interface PortalResult {
   success: boolean;
@@ -12,17 +16,18 @@ export interface PortalResult {
   errors: string[];
 }
 
+const DEV_BROWSER_TMP = join(homedir(), ".dev-browser", "tmp");
+
 /**
  * Run a script in dev-browser's sandboxed QuickJS environment.
  *
  * dev-browser scripts have access to these globals:
  *   - browser: browser automation API
  *   - console: logging
- *   - saveScreenshot(name, buffer): persist screenshot
- *   - writeFile / readFile: file I/O
+ *   - saveScreenshot(buffer, name): saves to ~/.dev-browser/tmp/<name>
+ *   - writeFile / readFile: file I/O in sandbox
  *
- * Scripts support top-level await. Pages are created/reused via
- * `browser.getPage("name")`.
+ * Scripts support top-level await.
  */
 export function runDevBrowserScript(
   script: string,
@@ -54,6 +59,64 @@ export function ensureOutputDir(purchaseId: string, portal: string): string {
   const dir = resolve("output", purchaseId, "screenshots", portal);
   mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+/**
+ * Copy screenshots from dev-browser's sandbox (~/.dev-browser/tmp/)
+ * to our output directory. Returns the list of copied file paths.
+ *
+ * dev-browser saves files with saveScreenshot(buf, "name.png") to
+ * ~/.dev-browser/tmp/name.png — we copy matching files to our output dir.
+ */
+export function collectScreenshots(
+  screenshotNames: string[],
+  outputDir: string
+): string[] {
+  const collected: string[] = [];
+
+  for (const name of screenshotNames) {
+    // The name might be a full path or just a filename
+    const baseName = name.split("/").pop() ?? name;
+    const srcPath = join(DEV_BROWSER_TMP, baseName);
+
+    if (existsSync(srcPath)) {
+      const destPath = join(outputDir, baseName);
+      try {
+        copyFileSync(srcPath, destPath);
+        collected.push(destPath);
+      } catch {
+        // Copy failed — skip this screenshot
+      }
+    }
+  }
+
+  // Also check for any recent screenshots in the tmp dir that we might have missed
+  if (existsSync(DEV_BROWSER_TMP)) {
+    try {
+      const files = readdirSync(DEV_BROWSER_TMP)
+        .filter(f => f.endsWith(".png"))
+        .sort()
+        .slice(-10); // Last 10 screenshots
+
+      for (const file of files) {
+        const destPath = join(outputDir, file);
+        if (!existsSync(destPath)) {
+          try {
+            copyFileSync(join(DEV_BROWSER_TMP, file), destPath);
+            if (!collected.includes(destPath)) {
+              collected.push(destPath);
+            }
+          } catch {
+            // Skip
+          }
+        }
+      }
+    } catch {
+      // Can't read tmp dir
+    }
+  }
+
+  return collected;
 }
 
 /**
