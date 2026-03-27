@@ -1,6 +1,6 @@
 # Experimental Agents
 
-Research documents and specifications for building production-grade AI agents using the Claude Agent SDK.
+Research documents, specifications, and reference implementations for building production-grade AI agents. Built by [Antigravity Apps](https://antigravityapps.dev) / [AppGambit](https://appgambit.com).
 
 ## Repository Structure
 
@@ -8,8 +8,6 @@ Research documents and specifications for building production-grade AI agents us
 ├── reference/          # Agentic knowledge base — patterns, playbooks, failure modes
 ├── specs/              # Real-world agent specifications
 ├── implementation/     # Working code (TypeScript, MCP servers, tests)
-├── docs/superpowers/   # Brainstorm and plan artifacts
-└── test-data/          # Sample data for testing
 ```
 
 ## Reference
@@ -57,3 +55,32 @@ Research documents and specifications for building production-grade AI agents us
 | Agent | Description |
 |-------|-------------|
 | [Personal Accounting Agent](specs/personal-accounting-agent-research.md) | Research document for an AI-powered personal accountant that handles financial data processing, categorization, reconciliation, reporting, and insights. |
+
+## Contributing
+
+Contributions are welcome! Whether it's a new agent spec, improvements to existing ones, or additions to the reference material.
+
+1. **Fork** the repository
+2. **Create a branch** for your contribution (`git checkout -b feature/your-agent-spec`)
+3. **Follow the existing structure:**
+   - Agent specs go in `specs/` — use existing specs as a template for format and depth
+   - Reference/knowledge docs go in `reference/`
+   - Working implementations go in `implementation/`
+4. **Submit a pull request** with a clear description of what you're adding
+
+### What makes a good contribution?
+
+- **Agent specs** that solve real business problems with enough depth to be implementable
+- **Reference material** that distills practical, non-obvious insights from building agents
+- **Implementation code** with tests and clear MCP tool interfaces
+- **Bug fixes** or improvements to existing specs based on real-world testing
+
+## License
+
+This project is licensed under the [MIT License](LICENSE) — free to use, modify, and distribute.
+
+## Contact
+
+- **Dhaval Patel** — [dhaval@appgambit.com](mailto:dhaval@appgambit.com)
+- [Antigravity Apps](https://antigravityapps.dev) — Product studio building AI-native applications
+- [AppGambit](https://appgambit.com) — Cloud consulting and engineering
