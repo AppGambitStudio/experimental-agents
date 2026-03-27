@@ -1455,7 +1455,12 @@ LANGUAGE:
 - Communicate in English by default
 - Understand Hinglish (Hindi-English mix) in voice notes
 - If the MR writes in Hindi, respond in Hindi
-- Use pharma field jargon naturally`;
+- Use pharma field jargon naturally
+
+ANTI-HALLUCINATION RULES:
+- Never cite a clinical study name, result, or statistic from general knowledge. Only reference studies listed in the Product Knowledge Base. If a doctor asks about a study not in your KB, say "I don't have data on that study — let me check with the medical team." Never fabricate study results, patient numbers, or efficacy percentages.
+- When quoting clinical data (e.g., "COPERNICUS showed 35% mortality reduction"), verify this comes from the product KB tool. If the tool has no match, retract the claim.
+- For RCPA data, only cite numbers returned by the get_rcpa_analysis tool. Never estimate or extrapolate prescription numbers.`;
 
 // --- CRM tools ---
 const getDoctorProfile = tool("get_doctor_profile", "Fetch doctor profile from CRM", getDoctorProfileSchema, getDoctorProfileHandler);

@@ -2528,6 +2528,117 @@ Every deep agent spec in this repo should address these security requirements:
 | S11 | **Identity reassertion** | Identity re-injected every N turns for long-running sessions | Verify reassertion interval |
 | S12 | **Graceful termination** | Agent terminates safely when critical anomalies detected | Verify termination handler |
 
+### Anti-Hallucination: Grounding Agent Outputs in Verified Data
+
+AI agents that generate confident-sounding but unverified outputs are dangerous — especially in domains like legal, medical, financial, and compliance where incorrect information has real consequences. These three techniques (from [Anthropic's hallucination reduction guide](https://docs.anthropic.com/en/docs/test-and-evaluate/strengthen-guardrails/reduce-hallucinations)) should be embedded in every deep agent's system prompt.
+
+#### Technique 1: Allow the Agent to Say "I Don't Know"
+
+Without explicit permission, Claude fills knowledge gaps with plausible fiction. The default behavior is to always give an answer, even when it shouldn't.
+
+**System prompt instruction:**
+```
+If you cannot find verified information to answer a question or support a claim,
+say "I don't have enough information to confidently assess this" or
+"I could not verify this — recommend [human expert] review."
+
+Do NOT:
+- Invent references, section numbers, case names, or statistics
+- Extrapolate from general training data when domain-specific verification is available
+- Present uncertain assessments with the same confidence as verified ones
+```
+
+**Per-domain examples:**
+
+| Domain | Bad (hallucination) | Good (grounded) |
+|--------|-------------------|-----------------|
+| Legal | "Section 42 of the Indian Contract Act covers this" (no such section) | "I could not find a specific Indian law provision for this clause. Recommend legal review." |
+| Medical/Pharma | "The APEX trial showed 45% reduction" (fabricated study) | "I don't have data on that study in the Product KB — let me check with the medical team." |
+| Compliance | "This control is compliant based on best practices" | "Evidence not collected via MCP — control status is UNVERIFIED." |
+| Real Estate | "This property has no disputes" | "No cases found on eCourts as of [date]. This does not guarantee no disputes exist — eCourts coverage is not comprehensive." |
+
+#### Technique 2: Verify with Citations
+
+Every factual claim in the agent's output must cite a source. If the agent can't find a supporting source, it must retract the claim.
+
+**System prompt instruction:**
+```
+CITATION RULES:
+1. Every factual claim must cite its source: tool result, document quote, or KB reference
+2. After generating a response, verify each citation by calling the appropriate tool
+3. If a tool returns no match for a cited reference, retract the claim and mark it:
+   "This assessment is based on general principles — verify with [domain expert]"
+4. Distinguish between verified data (from tools/MCP) and unverified claims (from training data)
+```
+
+**Implementation pattern — post-generation verification:**
+
+```typescript
+// Add a PostToolUse hook that tracks which citations were verified
+const citationTracker: HookCallback = async (input) => {
+  const toolResult = (input as any).tool_result;
+  const toolName = (input as any).tool_name;
+
+  // Track which legal sections, studies, or data points were actually
+  // returned by the knowledge base tools
+  if (toolName.includes("search_clause_patterns") ||
+      toolName.includes("check_enforceability")) {
+    const result = JSON.parse(toolResult);
+    if (result.patterns_found === 0 || result.enforceable === "unknown") {
+      // Tool returned no match — any citation based on this query is unverified
+      console.warn(`[CITATION WARNING] No KB match for: ${toolName}`);
+    }
+  }
+
+  return {};
+};
+```
+
+**The key insight:** Tools are the source of truth. If the agent claims "Section 27 of the Indian Contract Act makes this void" but `check_enforceability` wasn't called or returned "unknown," the citation is unverified. The system prompt should instruct the agent to call the tool FIRST, then make the claim — not the other way around.
+
+#### Technique 3: Use Direct Quotes for Factual Grounding
+
+For tasks involving documents (contracts, reports, evidence), force the agent to extract word-for-word quotes before analyzing. This prevents "paraphrase drift" where the model subtly changes meaning while summarizing.
+
+**System prompt instruction:**
+```
+QUOTE-FIRST ANALYSIS:
+1. Before analyzing any section of a document, extract the EXACT text as a direct quote
+2. Base your analysis on the quoted text, not a summary or paraphrase
+3. When the document contains cross-references ("as per Section 3.2"), actually read
+   and quote Section 3.2 — do not assume what it says
+4. If you cannot find the referenced section, flag it: "Cross-reference to Section 3.2
+   not found in the document — may be in a separate attachment"
+```
+
+**Why this matters for agentic workflows:**
+
+In a single-turn prompt, paraphrase drift is minor. In a multi-turn agentic loop where the agent reads a document, calls tools, reasons across multiple steps, and generates a report, the drift compounds. By turn 10, the agent's "understanding" of clause 8.2 may have drifted significantly from what clause 8.2 actually says. Direct quotes anchor every step.
+
+#### When NOT to Use These Techniques
+
+These techniques have a tradeoff: they reduce creative and exploratory output. The paper cited in the original discussion (arXiv 2307.02185) found that citation constraints reduce creative generation.
+
+**Use anti-hallucination rules for:**
+- Legal analysis, compliance assessment, medical/clinical data
+- Evidence-based reporting, financial analysis
+- Any output that will be acted upon or shared with stakeholders
+
+**Relax anti-hallucination rules for:**
+- Brainstorming and ideation
+- Creative writing, marketing copy
+- Exploratory research where speculation is valuable
+- Draft generation that will be human-reviewed anyway
+
+**Implementation: toggle approach** (like the [research-mode plugin](https://github.com/assafkip/research-mode))
+
+```typescript
+// Toggle anti-hallucination rules based on task type
+const systemPrompt = taskType === "analysis" || taskType === "compliance"
+  ? BASE_PROMPT + ANTI_HALLUCINATION_RULES  // Strict mode
+  : BASE_PROMPT;                             // Creative mode
+```
+
 ### Cross-references
 
 - **SOC 2 Agent**: Meta-compliance (the agent itself should follow SOC 2 controls), evidence integrity
@@ -2536,6 +2647,7 @@ Every deep agent spec in this repo should address these security requirements:
 - **MR Copilot Agent**: Doctor PII protection, RCPA data isolation, voice note security
 - **Cost Optimization Agent**: AWS IAM scoping, production resource guardrails
 - **Lab Report Agent**: Patient data isolation, clinical data integrity
+- **Legal/Contract Agent**: Citation verification via Legal KB tools, direct quote extraction from contracts
 
 ---
 

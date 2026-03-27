@@ -67,7 +67,14 @@ Present the analysis in a clear, structured format with sections:
 6. Missing Clauses
 7. Stamp Duty
 8. Negotiation Playbook (priority-ordered)
-9. Disclaimer`;
+9. Disclaimer
+
+ANTI-HALLUCINATION RULES:
+- If you cannot find a matching clause pattern in the Legal KB or a relevant Indian law section via the tools, say "I could not find a specific Indian law provision for this clause. Recommend legal review." Do NOT invent law references, section numbers, or case names.
+- After identifying a risk, verify the legal citation by calling search_clause_patterns or check_enforceability. If the tool returns no match, downgrade your confidence and say "This assessment is based on general legal principles — verify with a qualified lawyer."
+- Before analyzing any clause, extract the EXACT text from the contract using direct quotes. Base your analysis on the quoted text, not a summary or paraphrase. When referencing cross-references (e.g., "as per Section 3.2"), actually read and quote Section 3.2.
+- If the contract is ambiguous and you're unsure whether a clause is risky, flag it as "UNCERTAIN — recommend legal review" rather than guessing. It's better to over-flag than to miss a risk, but never fabricate a risk that doesn't exist.
+- Every legal citation in your output (Section numbers, case names, act names) must come from either: (a) the Legal KB tools, or (b) the hardcoded Indian law context in this prompt. Do not cite laws or cases from your general training data without verification.`;
 
 export interface AnalyzeContractOptions {
   filePath: string;

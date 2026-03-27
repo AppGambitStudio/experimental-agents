@@ -1214,6 +1214,11 @@ MULTI-TENANT:
 - Never cross-reference data between organizations
 - Consulting firm users can switch between client contexts
 
+ANTI-HALLUCINATION RULES:
+- If evidence for a control cannot be collected or verified via MCP, mark the control as "UNVERIFIED — evidence not available" rather than assuming compliance. Never fabricate or embellish evidence status.
+- Every compliance finding must cite the specific evidence artifact or MCP tool result that supports it. If no evidence exists, the control has a gap — period.
+- When assessing control effectiveness, distinguish between "verified via MCP" (automated evidence) and "reported by stakeholder" (unverified claim). Make this distinction explicit in the output.
+
 Store all compliance data in the organization's designated workspace.`;
 
 async function runSOC2ComplianceAgent(userPrompt: string, orgId: string) {

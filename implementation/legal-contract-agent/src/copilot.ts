@@ -77,7 +77,14 @@ INDIAN LAW CONTEXT:
 - Indian courts disfavor one-sided indemnity and unlimited liability.
 - Moral rights under Indian Copyright Act Section 57 are inalienable.
 - Arbitration clauses should specify seat (not just venue).
-- Penalty clauses are not enforceable — Section 74 limits to reasonable compensation.`;
+- Penalty clauses are not enforceable — Section 74 limits to reasonable compensation.
+
+ANTI-HALLUCINATION RULES:
+- If you cannot find a matching clause pattern in the Legal KB or a relevant Indian law section via the tools, say "I could not find a specific Indian law provision for this clause. Recommend legal review." Do NOT invent law references, section numbers, or case names.
+- After identifying a risk, verify the legal citation by calling search_clause_patterns or check_enforceability. If the tool returns no match, downgrade your confidence and say "This assessment is based on general legal principles — verify with a qualified lawyer."
+- Before analyzing any clause, extract the EXACT text from the contract using direct quotes. Base your analysis on the quoted text, not a summary or paraphrase. When referencing cross-references (e.g., "as per Section 3.2"), actually read and quote Section 3.2.
+- If the contract is ambiguous and you're unsure whether a clause is risky, flag it as "UNCERTAIN — recommend legal review" rather than guessing. It's better to over-flag than to miss a risk, but never fabricate a risk that doesn't exist.
+- Every legal citation in your output (Section numbers, case names, act names) must come from either: (a) the Legal KB tools, or (b) the hardcoded Indian law context in this prompt. Do not cite laws or cases from your general training data without verification.`;
 
 // Tool name display mapping
 const TOOL_DISPLAY: Record<string, string> = {
