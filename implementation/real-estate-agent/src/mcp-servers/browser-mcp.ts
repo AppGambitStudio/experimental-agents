@@ -1,5 +1,6 @@
 // MCP server wrapping portal automation modules
-// Exposes Gujarat RERA portal tools and a generic screenshot tool
+// Exposes Gujarat RERA portal tools, eCourts, AnyRoR, GARVI, SMC Tax, GSTN,
+// and a generic screenshot tool
 
 import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
@@ -12,9 +13,14 @@ import {
   buildNavigationScript,
   ensureOutputDir,
 } from "../portals/base-portal.js";
+import * as ecourts from "../portals/ecourts.js";
+import * as anyror from "../portals/anyror.js";
+import * as garvi from "../portals/garvi.js";
+import * as smcTax from "../portals/smc-tax.js";
+import * as gstn from "../portals/gstn.js";
 
 // ---------------------------------------------------------------------------
-// Tools
+// Existing RERA Tools
 // ---------------------------------------------------------------------------
 
 const searchReraProjectTool = tool(
@@ -179,15 +185,300 @@ console.log("__RESULT_START__" + JSON.stringify(output) + "__RESULT_END__");
 );
 
 // ---------------------------------------------------------------------------
+// eCourts Tools
+// ---------------------------------------------------------------------------
+
+const searchEcourtsTool = tool(
+  "search_ecourts",
+  "Search eCourts (services.ecourts.gov.in) for court cases by party name. " +
+    "Use this to check if the seller, builder, or promoter has any pending litigation. " +
+    "If the result includes captcha_required: true, inform the user and suggest Claude Browser MCP fallback.",
+  {
+    party_name: z.string().describe("Name of the party to search for (seller, builder, or promoter name)"),
+    state: z.string().describe("State name (e.g. 'Gujarat')"),
+    district: z.string().describe("District name (e.g. 'Surat')"),
+    purchase_id: z
+      .string()
+      .optional()
+      .describe("Purchase/session ID for organizing screenshots (optional)"),
+  },
+  async ({ party_name, state, district, purchase_id }) => {
+    const result = await ecourts.searchByPartyName(
+      party_name,
+      state,
+      district,
+      purchase_id ?? "anonymous"
+    );
+    // Annotate output if captcha was required
+    if (result.data && typeof result.data === "object" && "captcha_required" in (result.data as Record<string, unknown>)) {
+      const data = result.data as Record<string, unknown>;
+      if (data.captcha_required === true) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              ...result,
+              _note: "CAPTCHA detected on eCourts portal. Automated search could not complete. Suggest using interactive copilot mode with Claude Browser MCP as fallback.",
+            }),
+          }],
+        };
+      }
+    }
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
+// ---------------------------------------------------------------------------
+// AnyRoR Tools
+// ---------------------------------------------------------------------------
+
+const searchAnyrorLandRecordTool = tool(
+  "search_anyror_land_record",
+  "Search AnyRoR (anyror.gujarat.gov.in) for urban land records by survey details. " +
+    "Use this to verify land ownership, survey boundaries, and encumbrance status from Gujarat revenue records. " +
+    "If portal_unavailable is returned, note it in your report.",
+  {
+    district: z.string().describe("District name (e.g. 'Surat')"),
+    taluka: z.string().describe("Taluka name (e.g. 'Surat City')"),
+    village: z.string().describe("Village or ward name"),
+    survey_no: z.string().describe("Survey number or TP number"),
+    purchase_id: z
+      .string()
+      .optional()
+      .describe("Purchase/session ID for organizing screenshots (optional)"),
+  },
+  async ({ district, taluka, village, survey_no, purchase_id }) => {
+    const result = await anyror.searchUrbanLandRecord(
+      district,
+      taluka,
+      village,
+      survey_no,
+      purchase_id ?? "anonymous"
+    );
+    if (result.data && typeof result.data === "object" && "portal_unavailable" in (result.data as Record<string, unknown>)) {
+      const data = result.data as Record<string, unknown>;
+      if (data.portal_unavailable === true) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              ...result,
+              _note: "AnyRoR portal is currently unavailable. Land record verification could not be completed. Suggest trying again later or using interactive copilot mode.",
+            }),
+          }],
+        };
+      }
+    }
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
+const searchAnyrorByOwnerTool = tool(
+  "search_anyror_by_owner",
+  "Search AnyRoR (anyror.gujarat.gov.in) by owner name to find properties they own. " +
+    "Use this to verify the seller's property holdings and cross-check ownership claims.",
+  {
+    owner_name: z.string().describe("Owner/seller name to search for"),
+    district: z.string().describe("District name (e.g. 'Surat')"),
+    purchase_id: z
+      .string()
+      .optional()
+      .describe("Purchase/session ID for organizing screenshots (optional)"),
+  },
+  async ({ owner_name, district, purchase_id }) => {
+    const result = await anyror.searchPropertyByOwner(
+      owner_name,
+      district,
+      purchase_id ?? "anonymous"
+    );
+    if (result.data && typeof result.data === "object" && "portal_unavailable" in (result.data as Record<string, unknown>)) {
+      const data = result.data as Record<string, unknown>;
+      if (data.portal_unavailable === true) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              ...result,
+              _note: "AnyRoR portal is currently unavailable. Owner search could not be completed.",
+            }),
+          }],
+        };
+      }
+    }
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
+// ---------------------------------------------------------------------------
+// GARVI Tools
+// ---------------------------------------------------------------------------
+
+const searchGarviDocumentTool = tool(
+  "search_garvi_document",
+  "Search GARVI (garvi.gujarat.gov.in) for registered documents by document number. " +
+    "Use this to verify if a sale deed, agreement, or other document has been registered with the Sub-Registrar Office.",
+  {
+    document_no: z.string().describe("Registered document number"),
+    year: z.string().describe("Year of registration (e.g. '2024')"),
+    sro: z.string().describe("Sub-Registrar Office name or code (e.g. 'Surat-1')"),
+    purchase_id: z
+      .string()
+      .optional()
+      .describe("Purchase/session ID for organizing screenshots (optional)"),
+  },
+  async ({ document_no, year, sro, purchase_id }) => {
+    const result = await garvi.searchRegisteredDocument(
+      document_no,
+      year,
+      sro,
+      purchase_id ?? "anonymous"
+    );
+    if (result.data && typeof result.data === "object" && "portal_unavailable" in (result.data as Record<string, unknown>)) {
+      const data = result.data as Record<string, unknown>;
+      if (data.portal_unavailable === true) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              ...result,
+              _note: "GARVI portal is currently unavailable. Document verification could not be completed.",
+            }),
+          }],
+        };
+      }
+    }
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
+const lookupGarviJantriTool = tool(
+  "lookup_garvi_jantri",
+  "Look up jantri (ready reckoner) rates on GARVI (garvi.gujarat.gov.in) for a specific survey. " +
+    "Use this to get the government-assessed land value for stamp duty calculation and price comparison.",
+  {
+    district: z.string().describe("District name (e.g. 'Surat')"),
+    taluka: z.string().describe("Taluka name (e.g. 'Surat City')"),
+    village: z.string().describe("Village or ward name"),
+    survey_no: z.string().describe("Survey number or TP number"),
+    purchase_id: z
+      .string()
+      .optional()
+      .describe("Purchase/session ID for organizing screenshots (optional)"),
+  },
+  async ({ district, taluka, village, survey_no, purchase_id }) => {
+    const result = await garvi.lookupJantriOnline(
+      district,
+      taluka,
+      village,
+      survey_no,
+      purchase_id ?? "anonymous"
+    );
+    if (result.data && typeof result.data === "object" && "portal_unavailable" in (result.data as Record<string, unknown>)) {
+      const data = result.data as Record<string, unknown>;
+      if (data.portal_unavailable === true) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              ...result,
+              _note: "GARVI portal is currently unavailable for jantri lookup.",
+            }),
+          }],
+        };
+      }
+    }
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
+// ---------------------------------------------------------------------------
+// SMC Property Tax Tool
+// ---------------------------------------------------------------------------
+
+const checkSmcPropertyTaxTool = tool(
+  "check_smc_property_tax",
+  "Check SMC (Surat Municipal Corporation) property tax payment status. " +
+    "Use this to verify if property taxes are up to date — unpaid taxes are a red flag and can block registration.",
+  {
+    property_id: z.string().describe("SMC property tax ID / assessment number"),
+    purchase_id: z
+      .string()
+      .optional()
+      .describe("Purchase/session ID for organizing screenshots (optional)"),
+  },
+  async ({ property_id, purchase_id }) => {
+    const result = await smcTax.checkPropertyTax(
+      property_id,
+      purchase_id ?? "anonymous"
+    );
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
+// ---------------------------------------------------------------------------
+// GSTN Verification Tool
+// ---------------------------------------------------------------------------
+
+const verifyGstinTool = tool(
+  "verify_gstin",
+  "Verify a builder/promoter's GST registration (GSTIN) on the GST portal. " +
+    "Use this to confirm the builder is a legitimate registered business and check their GST compliance status.",
+  {
+    gstin: z.string().describe("GST Identification Number (15-character alphanumeric, e.g. 24AABCU9603R1ZM)"),
+    purchase_id: z
+      .string()
+      .optional()
+      .describe("Purchase/session ID for organizing screenshots (optional)"),
+  },
+  async ({ gstin, purchase_id }) => {
+    const result = await gstn.verifyGstin(
+      gstin,
+      purchase_id ?? "anonymous"
+    );
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
+// ---------------------------------------------------------------------------
 // MCP Server
 // ---------------------------------------------------------------------------
 
 export const browserMcp = createSdkMcpServer({
   name: "browser-mcp",
-  version: "0.1.0",
+  version: "0.2.0",
   tools: [
+    // Existing RERA tools
     searchReraProjectTool,
     getReraProjectDetailsTool,
     takePortalScreenshotTool,
+    // New Part 2 portal tools
+    searchEcourtsTool,
+    searchAnyrorLandRecordTool,
+    searchAnyrorByOwnerTool,
+    searchGarviDocumentTool,
+    lookupGarviJantriTool,
+    checkSmcPropertyTaxTool,
+    verifyGstinTool,
   ],
 });
