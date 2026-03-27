@@ -50,7 +50,7 @@ Property buying in India is an information-asymmetry nightmare:
 ### Why Claude Agent SDK
 
 The Agent SDK is ideal because property verification requires:
-- **Browser automation via Puppeteer/Playwright** — navigate government portals that have no APIs, fill forms, solve CAPTCHAs (with human help), extract data from rendered HTML
+- **Sandboxed browser automation via dev-browser** — navigate government portals that have no APIs using sandboxed QuickJS WASM execution (scripts can't access host), persistent page sessions (navigate AnyRoR's District→Taluka→Village flow once, then run extraction scripts), and AI-optimized snapshots via `page.snapshotForAI()` for token-efficient data extraction
 - **Multi-modal understanding** — parse Gujarati-language land records, read scanned title deeds, interpret government portal layouts
 - **Multi-model orchestration** — Opus for agreement review and cross-reference reasoning, Sonnet for portal data analysis, Haiku for checklists and calculations
 - **MCP tool architecture** — browser automation, property knowledge base, document parsing, and purchase tracking as separate servers that compose into workflows
@@ -70,7 +70,7 @@ The Agent SDK is ideal because property verification requires:
                     │      (Purchase Orchestrator)                │
                     │                                             │
                     │   Claude Agent SDK + 4 MCP Servers          │
-                    │   + Puppeteer/Playwright Browser Engine     │
+                    │   + dev-browser (sandboxed Playwright)       │
                     └──────────────────┬────────────────────────┘
                                        │
          ┌───────────┬─────────────────┼──────────────┬────────────┐
@@ -91,7 +91,7 @@ The Agent SDK is ideal because property verification requires:
    │                    4 MCP Servers                               │
    │                                                                │
    │  browser-mcp            property-kb-mcp     document-mcp      │
-   │  (Puppeteer/Playwright  (Gujarat property   (DocProof for     │
+   │  (dev-browser sandboxed (Gujarat property   (DocProof for     │
    │   for portal naviga-    knowledge — jantri  PDF parsing,      │
    │   tion: AnyRoR, RERA,   rates, stamp duty,  Sarvam AI for    │
    │   eCourts, GARVI, SMC,  registration fees,  Gujarati title   │
@@ -344,7 +344,13 @@ Models:
                  claude-haiku-4-5 (checklists, simple lookups, jantri rate retrieval,
                                    payment tracking, status updates)
 MCP Servers:     4 custom — browser-mcp, property-kb-mcp, document-mcp, tracker-mcp
-Browser Auto:    Puppeteer (primary) / Playwright (fallback) for government portal navigation
+Browser Auto:    dev-browser (https://github.com/SawyerHood/dev-browser) — sandboxed browser
+                 automation via QuickJS WASM. Uses Playwright under the hood but adds:
+                 • Sandboxed execution (scripts can't access host filesystem/network)
+                 • Persistent page sessions (navigate once, run multiple scripts)
+                 • AI-optimized snapshots via page.snapshotForAI() (token-efficient)
+                 • Faster + cheaper than raw Playwright MCP (3m53s/$0.88 vs 4m31s/$1.45)
+                 Fallback: raw Playwright if dev-browser unavailable
 Document Parse:  DocProof (PDF → clean text, handles scanned documents)
 Regional OCR:    Sarvam AI (Gujarati title deeds, old sale deeds, government notices)
 Storage:         PostgreSQL (property KB, purchase tracking, verification logs)
@@ -379,7 +385,15 @@ npm install @aws-sdk/client-s3           # S3 for dossier storage
 
 ## 4. Gujarat Government Portal Integration
 
-This is the core differentiator — the agent navigates government portals that have no APIs, extracts structured data from rendered HTML, captures screenshot evidence, and cross-references findings across portals. Each portal section below specifies: what data is available, the navigation flow for browser automation, data extraction strategy, CAPTCHA handling, screenshot capture points, and red flags to detect.
+This is the core differentiator — the agent navigates government portals that have no APIs, extracts structured data, captures screenshot evidence, and cross-references findings across portals.
+
+**Browser automation via [dev-browser](https://github.com/SawyerHood/dev-browser):**
+- Scripts run in a **QuickJS WASM sandbox** — even if a government portal has malicious JavaScript, it cannot access the host system
+- **Persistent page sessions** — navigate AnyRoR's District → Taluka → Village → Survey flow once, then run multiple extraction scripts against the same page without re-navigating
+- **`page.snapshotForAI()`** — returns structured page state optimized for AI consumption (more token-efficient than full screenshots for data extraction; screenshots still captured for the dossier audit trail)
+- **Performance**: benchmarked at 3m53s / $0.88 vs raw Playwright MCP at 4m31s / $1.45
+
+Each portal section below specifies: what data is available, the navigation flow for browser automation, data extraction strategy, CAPTCHA handling, screenshot capture points, and red flags to detect.
 
 ### 4.1 AnyRoR Gujarat (anyror.gujarat.gov.in)
 
@@ -1101,7 +1115,8 @@ ecourts-search-builder-20260320T101545.png
 **SHA-256 Hashing:** Every screenshot is hashed immediately after capture. The hash is stored in verification-log.json. This ensures the evidence trail is tamper-evident — if a screenshot is modified after capture, the hash won't match.
 
 **Screenshot Optimization:**
-- Captured at full resolution via Puppeteer `page.screenshot()`
+- Captured at full resolution via dev-browser `page.screenshot()` (Playwright API)
+- Structured data also captured via `page.snapshotForAI()` for efficient AI processing
 - Optimized with `sharp` library to reduce file size while maintaining readability
 - Average screenshot size: 200-500 KB
 - Total dossier screenshot size per property: 5-15 MB
@@ -1410,7 +1425,13 @@ The agent maintains a library of 30+ red flag patterns, each with severity, dete
 
 ### 7.1 browser-mcp — Government Portal Automation
 
-This MCP server wraps Puppeteer/Playwright to provide high-level tools for each government portal. Each tool handles navigation, CAPTCHA coordination, data extraction, and screenshot capture.
+This MCP server wraps [dev-browser](https://github.com/SawyerHood/dev-browser) to provide high-level tools for each government portal. dev-browser provides sandboxed Playwright execution via QuickJS WASM — scripts cannot access the host filesystem or network (only the browser context). Each tool handles navigation, CAPTCHA coordination, data extraction, and screenshot capture.
+
+**Why dev-browser over raw Playwright:**
+- **Security**: Government portals may have unpredictable JavaScript. Sandbox prevents host compromise.
+- **Persistent sessions**: AnyRoR requires 4-step navigation (District → Taluka → Village → Survey). With dev-browser, we navigate once and keep the session — subsequent scripts (extract 7/12, extract 8A, take screenshot) reuse the same page.
+- **AI snapshots**: `page.snapshotForAI()` returns structured page state instead of raw HTML — Claude can reason over it more efficiently than parsing HTML or reading screenshots.
+- **Cost**: ~40% cheaper than raw Playwright MCP in benchmarks.
 
 #### Tool: `navigate_anyror`
 
@@ -3776,7 +3797,7 @@ For property advisory firms using this agent for multiple clients:
 ### Cloud Cost Optimization Agent (ScaleCapacity)
 
 If deployed at scale for a property-tech platform:
-- Portal automation infrastructure costs (Puppeteer/Playwright compute)
+- Portal automation infrastructure costs (dev-browser compute)
 - S3 dossier storage optimization
 - Database scaling for property KB
 
@@ -3794,7 +3815,7 @@ If deployed at scale for a property-tech platform:
 | **Portal downtime** | Government portals have unpredictable downtime | Retry logic, partial results with "portal unavailable" flags, continue with available portals |
 | **Rate accuracy** | Jantri rates and stamp duty may change without notice | KB refresh mechanism, always verify against portal during active analysis |
 | **Single state (v1)** | Only Gujarat in initial release | Architecture designed for state expansion from day 1 |
-| **No direct API access** | All government portals require browser automation (no APIs) | Puppeteer/Playwright with resilient selectors, screenshot-based fallback extraction |
+| **No direct API access** | All government portals require browser automation (no APIs) | dev-browser (sandboxed Playwright) with persistent sessions, `snapshotForAI()` for structured extraction, screenshot fallback |
 | **No historical data** | Agent cannot access records older than what portals show | Flag when record history is incomplete, recommend manual verification at Sub-Registrar for older records |
 
 ---
