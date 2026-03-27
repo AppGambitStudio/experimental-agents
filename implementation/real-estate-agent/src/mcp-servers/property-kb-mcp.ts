@@ -6,6 +6,7 @@ import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { lookupJantriRate, SURAT_JANTRI_RATES } from "../knowledge-base/jantri-rates.js";
 import { calculateStampDuty } from "../knowledge-base/stamp-duty.js";
+import { calculateTotalCost, formatCostBreakdown } from "../knowledge-base/total-cost.js";
 import type { PropertyType, RedFlag } from "../types/index.js";
 
 // Red flag patterns for property verification
@@ -432,6 +433,64 @@ const getRequiredDocumentsTool = tool(
   { annotations: { readOnlyHint: true } }
 );
 
+const calculateTotalCostTool = tool(
+  "calculate_total_cost",
+  "Calculate the TRUE total cost of a property purchase in Gujarat, including all hidden costs. Shows: bank vs cash split, stamp duty (on declared value only), registration fee, GST, maintenance deposit, corpus fund, parking, advocate fees, broker commission, utility deposits. Also calculates legal risks of cash component and future capital gains tax impact of under-declaration. This is the most important tool for a buyer — it shows what you ACTUALLY pay vs the listed price.",
+  {
+    total_price: z.number().describe("Total agreed price with builder/seller (bank + cash combined) in INR"),
+    declared_value: z.number().describe("Declared/registered value (bank payment only — what appears on paper) in INR. If no cash component, same as total_price."),
+    carpet_area_sqft: z.number().describe("Carpet area in square feet"),
+    property_type: z.enum(["residential_flat", "commercial_office", "plot", "row_house", "villa"]).describe("Property type"),
+    buyer_gender: z.enum(["male", "female"]).describe("Buyer gender (female first-time buyers get registration fee discount in Gujarat)"),
+    is_first_property: z.boolean().describe("Is this the buyer's first property?"),
+    is_under_construction: z.boolean().describe("Is the property under construction? (affects GST applicability)"),
+    maintenance_deposit_per_sqft: z.number().optional().describe("Maintenance deposit rate in ₹/sqft (if known)"),
+    monthly_maintenance: z.number().optional().describe("Monthly maintenance amount in ₹ (if known)"),
+    maintenance_months: z.number().optional().describe("Months of advance maintenance required (typically 12-24)"),
+    corpus_fund: z.number().optional().describe("One-time corpus/sinking fund amount in ₹"),
+    parking_charges: z.number().optional().describe("Parking charges in ₹ (if separate from price)"),
+    parking_type: z.enum(["covered", "open", "stilt", "none"]).optional().describe("Parking type (for default estimate if charges not provided)"),
+    advocate_fees: z.number().optional().describe("Lawyer/advocate fees in ₹"),
+    broker_commission: z.number().optional().describe("Broker commission in ₹ (if applicable)"),
+    utility_deposits: z.number().optional().describe("Electricity/water connection deposits in ₹"),
+  },
+  async (input) => {
+    const breakdown = calculateTotalCost({
+      propertyType: input.property_type,
+      totalPrice: input.total_price,
+      declaredValue: input.declared_value,
+      carpetAreaSqft: input.carpet_area_sqft,
+      buyerGender: input.buyer_gender,
+      isFirstProperty: input.is_first_property,
+      isUnderConstruction: input.is_under_construction,
+      maintenanceDepositPerSqft: input.maintenance_deposit_per_sqft,
+      monthlyMaintenance: input.monthly_maintenance,
+      maintenanceMonths: input.maintenance_months,
+      corpusFund: input.corpus_fund,
+      parkingCharges: input.parking_charges,
+      parkingType: input.parking_type,
+      advocateFees: input.advocate_fees,
+      brokerCommission: input.broker_commission,
+      utilityDeposits: input.utility_deposits,
+    });
+
+    const formattedReport = formatCostBreakdown(breakdown);
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            ...breakdown,
+            formatted_report: formattedReport,
+          }),
+        },
+      ],
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
 export const propertyKbMcp = createSdkMcpServer({
   name: "property-kb-mcp",
   tools: [
@@ -439,5 +498,6 @@ export const propertyKbMcp = createSdkMcpServer({
     calculateStampDutyTool,
     checkRedFlagsTool,
     getRequiredDocumentsTool,
+    calculateTotalCostTool,
   ],
 });
