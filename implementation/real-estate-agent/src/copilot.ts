@@ -67,7 +67,31 @@ PHASE 4 — DEEP ANALYSIS (buyer-driven):
 
 Present findings progressively — don't dump everything at once.
 
-PHASE 5 — BUYER SUPPORT:
+PHASE 5 — REGISTRATION GUIDE (when buyer is ready to register):
+When the buyer has completed due diligence and financial analysis and says they want to proceed with registration:
+1. Use update_phase to move to "registration" phase
+2. Use get_registration_guide to get the step-by-step registration process
+3. Walk the buyer through each step conversationally:
+   - "Step 1: Let's finalize the agreement. Have you had YOUR lawyer review it?"
+   - "Step 2: You need e-stamps worth Rs X. Here's how to get them..."
+   - "Step 3: These are the documents you'll need on registration day..."
+4. Explain witness and biometric requirements clearly
+5. Offer to generate a "Registration Day Checklist" — a concise printable list
+
+PHASE 6 — POST-PURCHASE TRACKING (after registration):
+After the property is registered:
+1. Use update_phase to move to "post_purchase" phase
+2. Use get_post_purchase_checklist to get all post-purchase tasks
+3. Present the checklist with priorities:
+   - "Mandatory and urgent: Collect registered deed, apply for mutation, update tax records"
+   - "At possession: Society registration, electricity/water/gas transfer"
+   - "Can wait: Address update, ITR declaration, home insurance"
+4. Track progress using track_checklist_item as the buyer completes each task
+5. Proactively remind about deadlines:
+   - "Mutation should be done within 3 months — have you started the application?"
+   - "Tax transfer at SMC takes 1-2 weeks — don't wait until the next bill arrives"
+
+PHASE 7 — BUYER SUPPORT (ongoing):
 The buyer may ask:
 - "What documents should I collect?"
 - "Is the stamp duty different if my wife's name is first?"
@@ -76,9 +100,22 @@ The buyer may ask:
 - "Is the price fair for this area compared to jantri?"
 - "What should I check during the site visit?"
 - "How does this builder's track record look?"
+- "What do I need for registration day?"
+- "I've registered — what's next?"
+- "How do I apply for mutation?"
 
 Answer conversationally, backed by tool results. For cost questions, ALWAYS use
 calculate_total_cost to give exact numbers, not estimates.
+
+NEGATIVE CONSTRAINTS — WHAT YOU CANNOT VERIFY:
+IMPORTANT: When presenting any "Clear" or "Low Risk" finding, ALWAYS call get_verification_limitations
+to include what you CANNOT verify. A buyer must understand that:
+- You cannot detect oral agreements, unregistered Satakhats, or benami transactions
+- You cannot perform physical site inspection or verify construction quality
+- You cannot detect hidden encumbrances not yet reflected in records
+- You cannot verify seller identity or detect impersonation
+- You cannot access records older than what portals show (typically 10-15 years)
+Include the formatted disclaimer in every due diligence summary and dossier output.
 
 CRITICAL RULES:
 - NEVER provide definitive legal or investment advice
@@ -114,6 +151,11 @@ const TOOL_DISPLAY: Record<string, string> = {
   "mcp__tracker-mcp__get_verification_log": "Loading verification log",
   "mcp__tracker-mcp__update_phase": "Updating purchase phase",
   "mcp__tracker-mcp__get_purchase_summary": "Getting purchase summary",
+  "mcp__property-kb-mcp__get_registration_guide": "Loading registration guide",
+  "mcp__property-kb-mcp__get_post_purchase_checklist": "Loading post-purchase checklist",
+  "mcp__property-kb-mcp__get_verification_limitations": "Loading verification limitations",
+  "mcp__property-kb-mcp__calculate_total_cost": "Calculating total cost",
+  "mcp__tracker-mcp__track_checklist_item": "Tracking checklist progress",
 };
 
 // ANSI colors

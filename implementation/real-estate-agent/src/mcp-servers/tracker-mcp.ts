@@ -7,10 +7,13 @@ import { z } from "zod";
 import { randomUUID } from "crypto";
 import { writeFile, mkdir, readFile } from "fs/promises";
 import { resolve } from "path";
-import type { Purchase, VerificationEntry, PurchasePhase } from "../types/index.js";
+import type { Purchase, VerificationEntry, PurchasePhase, ChecklistItem, ChecklistItemStatus } from "../types/index.js";
 
 // In-memory store for prototype
 const purchases = new Map<string, Purchase>();
+
+// Checklist items per purchase
+const checklists = new Map<string, ChecklistItem[]>();
 
 const createPurchaseTool = tool(
   "create_purchase",
@@ -336,6 +339,82 @@ const getPurchaseSummaryTool = tool(
   { annotations: { readOnlyHint: true } }
 );
 
+const trackChecklistItemTool = tool(
+  "track_checklist_item",
+  "Update the status of a post-purchase checklist item. Use this to track which formalities the buyer has completed (mutation, tax transfer, society registration, etc.).",
+  {
+    purchase_id: z.string().describe("Purchase ID"),
+    task_id: z.string().describe("Task ID from get_post_purchase_checklist (e.g. 'post_001')"),
+    status: z
+      .enum(["pending", "in_progress", "completed", "skipped", "blocked"])
+      .describe("New status"),
+    notes: z.string().optional().describe("Optional notes (e.g. 'Application submitted on 2026-04-01')"),
+  },
+  async ({ purchase_id, task_id, status, notes }) => {
+    const purchase = purchases.get(purchase_id);
+    if (!purchase) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              error: `Purchase '${purchase_id}' not found. Available: ${[...purchases.keys()].join(", ") || "none"}`,
+            }),
+          },
+        ],
+      };
+    }
+
+    if (!checklists.has(purchase_id)) {
+      checklists.set(purchase_id, []);
+    }
+
+    const items = checklists.get(purchase_id)!;
+    const existing = items.find((i) => i.taskId === task_id);
+
+    if (existing) {
+      existing.status = status as ChecklistItemStatus;
+      existing.notes = notes ?? existing.notes;
+      if (status === "completed") {
+        existing.completedAt = new Date().toISOString();
+      }
+    } else {
+      items.push({
+        taskId: task_id,
+        purchaseId: purchase_id,
+        status: status as ChecklistItemStatus,
+        completedAt: status === "completed" ? new Date().toISOString() : undefined,
+        notes,
+      });
+    }
+
+    const completedCount = items.filter((i) => i.status === "completed").length;
+    const totalTracked = items.length;
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            success: true,
+            purchase_id,
+            task_id,
+            status,
+            notes: notes ?? null,
+            progress: `${completedCount}/${totalTracked} tasks completed`,
+            all_items: items.map((i) => ({
+              task_id: i.taskId,
+              status: i.status,
+              completed_at: i.completedAt ?? null,
+              notes: i.notes ?? null,
+            })),
+          }),
+        },
+      ],
+    };
+  }
+);
+
 export const trackerMcp = createSdkMcpServer({
   name: "tracker-mcp",
   tools: [
@@ -344,5 +423,6 @@ export const trackerMcp = createSdkMcpServer({
     getVerificationLogTool,
     updatePhaseTool,
     getPurchaseSummaryTool,
+    trackChecklistItemTool,
   ],
 });

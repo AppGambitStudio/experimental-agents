@@ -7,7 +7,10 @@ import { z } from "zod";
 import { lookupJantriRate, SURAT_JANTRI_RATES } from "../knowledge-base/jantri-rates.js";
 import { calculateStampDuty } from "../knowledge-base/stamp-duty.js";
 import { calculateTotalCost, formatCostBreakdown } from "../knowledge-base/total-cost.js";
-import type { PropertyType, RedFlag } from "../types/index.js";
+import { getRegistrationGuide } from "../knowledge-base/registration-guide.js";
+import { getPostPurchaseChecklist } from "../knowledge-base/post-purchase.js";
+import { getConstraintsForPhase, formatConstraintsDisclaimer } from "../knowledge-base/negative-constraints.js";
+import type { PropertyType, RedFlag, PurchasePhase } from "../types/index.js";
 
 // Red flag patterns for property verification
 const RED_FLAG_PATTERNS: RedFlag[] = [
@@ -491,6 +494,138 @@ const calculateTotalCostTool = tool(
   { annotations: { readOnlyHint: true } }
 );
 
+const getRegistrationGuideTool = tool(
+  "get_registration_guide",
+  "Get step-by-step Gujarat property registration guide including e-stamping, Sub-Registrar appointment, biometric verification, document preparation, witness requirements, and post-registration collection. Tailored to property type.",
+  {
+    property_type: z
+      .enum(["residential_flat", "commercial_office", "plot", "row_house", "villa"])
+      .describe("Property type"),
+    city: z
+      .string()
+      .optional()
+      .describe("City name (default: Surat)"),
+  },
+  async ({ property_type, city }) => {
+    const guide = getRegistrationGuide(property_type as PropertyType, city ?? "Surat");
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            property_type,
+            city: guide.city,
+            state: guide.state,
+            total_steps: guide.totalSteps,
+            estimated_total_time: guide.estimatedTotalTime,
+            steps: guide.steps.map((s) => ({
+              step: s.step,
+              title: s.title,
+              description: s.description,
+              location: s.location,
+              documents_needed: s.documentsNeeded,
+              estimated_time: s.estimatedTime,
+              fees: s.fees ?? null,
+              tips: s.tips,
+            })),
+            witness_requirements: {
+              count: guide.witnessRequirements.count,
+              id_required: guide.witnessRequirements.idRequired,
+              notes: guide.witnessRequirements.notes,
+            },
+            biometric_requirements: {
+              required: guide.biometricRequirements.required,
+              who: guide.biometricRequirements.who,
+              notes: guide.biometricRequirements.notes,
+            },
+            note: "This guide is specific to Gujarat property registration. The process may vary slightly by Sub-Registrar office. Always confirm requirements with your advocate.",
+          }),
+        },
+      ],
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
+const getPostPurchaseChecklistTool = tool(
+  "get_post_purchase_checklist",
+  "Get the complete post-purchase formalities checklist for Gujarat. Includes property mutation (8A update), tax transfer, society registration, utility connections, home loan verification, insurance, and document storage. Tasks are ordered by priority (mandatory first).",
+  {
+    property_type: z
+      .enum(["residential_flat", "commercial_office", "plot", "row_house", "villa"])
+      .describe("Property type"),
+  },
+  async ({ property_type }) => {
+    const tasks = getPostPurchaseChecklist(property_type as PropertyType);
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            property_type,
+            total_tasks: tasks.length,
+            mandatory_count: tasks.filter((t) => t.mandatory).length,
+            tasks: tasks.map((t, i) => ({
+              serial: i + 1,
+              id: t.id,
+              task: t.task,
+              description: t.description,
+              where: t.where,
+              when: t.when,
+              documents_needed: t.documentsNeeded,
+              estimated_time: t.estimatedTime,
+              mandatory: t.mandatory,
+              category: t.category,
+            })),
+            note: "Complete mandatory tasks first. Timelines are from the date of property registration. For Surat-specific offices, use the addresses and contacts provided.",
+          }),
+        },
+      ],
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
+const getVerificationLimitationsTool = tool(
+  "get_verification_limitations",
+  "Get a list of what this agent CANNOT verify or find. This is a safety disclaimer that should be included in every due diligence report and dossier. A 'Clear' status means no issues were found in available data — it does NOT mean the property is risk-free. Filtered by purchase phase.",
+  {
+    phase: z
+      .enum(["due_diligence", "document_review", "financial_analysis", "registration", "post_purchase"])
+      .optional()
+      .describe("Filter by purchase phase (omit for all constraints)"),
+  },
+  async ({ phase }) => {
+    const constraints = getConstraintsForPhase(phase as PurchasePhase | undefined);
+    const disclaimer = formatConstraintsDisclaimer(phase as PurchasePhase | undefined);
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            phase: phase ?? "all",
+            total_limitations: constraints.length,
+            critical_count: constraints.filter((c) => c.severity === "critical").length,
+            limitations: constraints.map((c) => ({
+              id: c.id,
+              limitation: c.limitation,
+              severity: c.severity,
+              reason: c.reason,
+              buyer_action: c.whatBuyerShouldDo,
+            })),
+            formatted_disclaimer: disclaimer,
+            note: "ALWAYS include this disclaimer in reports. A 'Clear' result without this disclaimer may give buyers false confidence.",
+          }),
+        },
+      ],
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
 export const propertyKbMcp = createSdkMcpServer({
   name: "property-kb-mcp",
   tools: [
@@ -499,5 +634,8 @@ export const propertyKbMcp = createSdkMcpServer({
     checkRedFlagsTool,
     getRequiredDocumentsTool,
     calculateTotalCostTool,
+    getRegistrationGuideTool,
+    getPostPurchaseChecklistTool,
+    getVerificationLimitationsTool,
   ],
 });

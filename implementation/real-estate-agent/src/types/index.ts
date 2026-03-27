@@ -126,3 +126,55 @@ export interface JantriRate {
   commercialRate: { min: number; max: number };
   unit: string;
 }
+
+export interface RegistrationStep {
+  step: number;
+  title: string;
+  description: string;
+  location: string;
+  documentsNeeded: string[];
+  estimatedTime: string;
+  fees?: string;
+  tips: string[];
+}
+
+export interface RegistrationGuide {
+  propertyType: PropertyType;
+  state: string;
+  city: string;
+  totalSteps: number;
+  estimatedTotalTime: string;
+  steps: RegistrationStep[];
+  witnessRequirements: {
+    count: number;
+    idRequired: boolean;
+    notes: string;
+  };
+  biometricRequirements: {
+    required: boolean;
+    who: string[];
+    notes: string;
+  };
+}
+
+export interface PostPurchaseTask {
+  id: string;
+  task: string;
+  description: string;
+  where: string;
+  when: string;
+  documentsNeeded: string[];
+  estimatedTime: string;
+  mandatory: boolean;
+  category: "legal" | "municipal" | "utility" | "financial" | "personal";
+}
+
+export type ChecklistItemStatus = "pending" | "in_progress" | "completed" | "skipped" | "blocked";
+
+export interface ChecklistItem {
+  taskId: string;
+  purchaseId: string;
+  status: ChecklistItemStatus;
+  completedAt?: string;
+  notes?: string;
+}
