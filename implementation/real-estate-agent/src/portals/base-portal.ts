@@ -26,16 +26,20 @@ export interface PortalResult {
  */
 export function runDevBrowserScript(
   script: string,
-  timeoutMs = 120000
+  timeoutSeconds = 120
 ): string {
   try {
     const result = execSync(
-      `dev-browser --headless <<'DEVBROWSER_EOF'\n${script}\nDEVBROWSER_EOF`,
-      { encoding: "utf-8", timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }
+      `dev-browser --headless --timeout ${timeoutSeconds} <<'DEVBROWSER_EOF'\n${script}\nDEVBROWSER_EOF`,
+      { encoding: "utf-8", timeout: (timeoutSeconds + 10) * 1000, maxBuffer: 10 * 1024 * 1024 }
     );
     return result;
   } catch (error) {
-    const err = error as { stderr?: string; message?: string };
+    const err = error as { stderr?: string; stdout?: string; message?: string };
+    // dev-browser may produce partial output before timeout — check stdout
+    if (err.stdout && err.stdout.includes("__RESULT_START__")) {
+      return err.stdout;
+    }
     throw new Error(
       `dev-browser script failed: ${err.stderr || err.message}`
     );

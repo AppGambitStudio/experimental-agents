@@ -1,29 +1,26 @@
 // Gujarat RERA portal automation
 // Portal: https://gujrera.gujarat.gov.in
 //
-// Note: Government portal UIs change frequently. Scripts are designed to be
-// resilient — they try multiple selector strategies and fall back to
-// snapshot-based extraction when specific selectors fail.
+// VERIFIED WORKING PATTERNS (March 2026):
+// 1. Homepage loads with 2 modal overlays that block interaction — must dismiss via JS
+// 2. Search input has placeholder "Project, Agent, Promoter, Professional, Location"
+// 3. Search works with project codes (e.g., "CAA10499"), not full RERA IDs
+// 4. Angular app — need to interact via page.evaluate() to bypass overlay issues
+// 5. "View More" link on search results navigates to #/project-preview with full details
+// 6. dev-browser needs --timeout 120 for this portal (default 30s is too short)
 
-import type { ReraProject, ReraProjectDetail } from "../types/index.js";
+import type { ReraProject } from "../types/index.js";
 import {
   runDevBrowserScript,
   ensureOutputDir,
-  buildNavigationScript,
   errorResult,
   successResult,
   type PortalResult,
 } from "./base-portal.js";
 
-const GUJRERA_BASE = "https://gujrera.gujarat.gov.in";
-const GUJRERA_SEARCH = `${GUJRERA_BASE}/project-search`;
-
 /**
  * Search for a RERA-registered project on the Gujarat RERA portal.
- *
- * @param query - The search term (RERA ID or project name)
- * @param searchType - Whether to search by RERA ID or project name
- * @param purchaseId - Optional purchase ID for organizing screenshots
+ * Uses the homepage search bar (the only reliable search method).
  */
 export async function searchReraProject(
   query: string,
@@ -32,382 +29,237 @@ export async function searchReraProject(
 ): Promise<PortalResult> {
   const screenshotDir = ensureOutputDir(purchaseId, "gujrera");
 
-  // Escape user input for safe embedding in the script
-  const safeQuery = query.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
-  const searchLabel = searchType === "rera_id" ? "RERA ID" : "Project Name";
-
-  const bodyScript = `
-// --- Take initial screenshot of the search page ---
-let screenshots = [];
-try {
-  const initShot = await page.screenshot();
-  saveScreenshot("${screenshotDir}/01-search-page.png", initShot);
-  screenshots.push("${screenshotDir}/01-search-page.png");
-} catch (_) {}
-
-// --- Get initial snapshot to understand the page structure ---
-let snapshot;
-try {
-  snapshot = await page.snapshotForAI();
-} catch (_) {
-  snapshot = null;
-}
-
-// --- Try to fill the search form using multiple strategies ---
-let searchSubmitted = false;
-
-// Strategy 1: Look for input fields by common patterns
-const inputSelectors = [
-  'input[name*="rera"]',
-  'input[name*="project"]',
-  'input[name*="search"]',
-  'input[placeholder*="RERA"]',
-  'input[placeholder*="project"]',
-  'input[placeholder*="search"]',
-  'input[placeholder*="Search"]',
-  'input[type="text"]',
-  'input[type="search"]',
-  '#txtSearchProject',
-  '#txtReraNo',
-  '#searchInput',
-];
-
-for (const selector of inputSelectors) {
-  try {
-    await page.fill(selector, '${safeQuery}');
-    searchSubmitted = true;
-    console.log("Filled input with selector: " + selector);
-    break;
-  } catch (_) {
-    // Selector not found, try next
+  // Extract the short project code from a full RERA ID
+  // e.g., "PR/GJ/SURAT/SURAT CITY/Surat Municipal Corporation/CAA10499/A1C/311224/311232"
+  // → search for "CAA10499"
+  let searchTerm = query;
+  if (searchType === "rera_id" && query.includes("/")) {
+    const parts = query.split("/");
+    // The project code is typically the part that starts with letters + numbers (e.g., CAA10499)
+    const codePart = parts.find(p => /^[A-Z]{2,4}\d{3,}$/i.test(p));
+    if (codePart) {
+      searchTerm = codePart;
+    }
   }
-}
 
-// Strategy 2: If search type selection is needed (radio/dropdown)
-if (searchSubmitted) {
-  const typeSelectors = ${searchType === "rera_id"
-    ? `[
-    'input[value*="rera"]',
-    'input[value*="RERA"]',
-    'input[value="1"]',
-    'select option[value*="rera"]',
-    '#searchByReraId',
-  ]`
-    : `[
-    'input[value*="project"]',
-    'input[value*="name"]',
-    'input[value="2"]',
-    'select option[value*="project"]',
-    '#searchByName',
-  ]`};
-  for (const sel of typeSelectors) {
-    try {
-      await page.click(sel);
-      console.log("Selected search type with: " + sel);
-      break;
-    } catch (_) {}
+  const safeQuery = searchTerm.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
+
+  const script = `
+const page = await browser.newPage();
+await page.goto("https://gujrera.gujarat.gov.in/", { timeout: 60000, waitUntil: "load" });
+await new Promise(r => setTimeout(r, 5000));
+
+// Step 1: Force dismiss ALL modal overlays (Gujarat RERA has 2+ modals on load)
+await page.evaluate(() => {
+  document.querySelectorAll('.modal, .modal-backdrop, .modal-dialog').forEach(el => el.remove());
+  document.body.classList.remove('modal-open');
+  document.body.style.overflow = 'auto';
+  document.querySelectorAll('.headingPdf, .homePageAnouncement').forEach(el => el.remove());
+});
+await new Promise(r => setTimeout(r, 1000));
+
+// Step 2: Fill search via evaluate (bypasses any remaining overlay issues)
+await page.evaluate((q) => {
+  const input = document.querySelector('input[placeholder*="Project"]');
+  if (input) {
+    input.value = q;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
   }
-}
+}, '${safeQuery}');
+await new Promise(r => setTimeout(r, 2000));
 
-// Strategy 3: Click the search/submit button
-const buttonSelectors = [
-  'button[type="submit"]',
-  'input[type="submit"]',
-  'button:has-text("Search")',
-  'button:has-text("search")',
-  'a:has-text("Search")',
-  '#btnSearch',
-  '.btn-search',
-  '.search-btn',
-];
+// Step 3: Click search button via JS
+await page.evaluate(() => {
+  const btn = document.querySelector('button.searchBtn');
+  if (btn) btn.click();
+});
+await new Promise(r => setTimeout(r, 8000));
 
-for (const btnSel of buttonSelectors) {
-  try {
-    await page.click(btnSel);
-    console.log("Clicked search with: " + btnSel);
-    break;
-  } catch (_) {}
-}
-
-// Wait for results to load
-await new Promise(r => setTimeout(r, 3000));
-
-// --- Take screenshot of results ---
+// Step 4: Take screenshot of results
 try {
-  const resultShot = await page.screenshot();
-  saveScreenshot("${screenshotDir}/02-search-results.png", resultShot);
-  screenshots.push("${screenshotDir}/02-search-results.png");
-} catch (_) {}
+  const buf = await page.screenshot({ fullPage: true });
+  await saveScreenshot(buf, "${screenshotDir}/01-search-results.png");
+} catch(e) {}
 
-// --- Extract results via snapshot ---
-let resultSnapshot;
-try {
-  resultSnapshot = await page.snapshotForAI();
-} catch (_) {
-  resultSnapshot = null;
-}
+// Step 5: Extract results text
+const text = await page.evaluate(() => document.body.innerText);
+const url = page.url();
 
-// --- Build the output ---
-const output = {
-  query: '${safeQuery}',
-  searchType: '${searchType}',
-  searchLabel: '${searchLabel}',
-  searchSubmitted: searchSubmitted,
-  initialSnapshot: snapshot,
-  resultSnapshot: resultSnapshot,
-  screenshots: screenshots,
-};
-
-console.log("__RESULT_START__" + JSON.stringify(output) + "__RESULT_END__");
+console.log("__RESULT_START__" + JSON.stringify({
+  url: url,
+  searchTerm: '${safeQuery}',
+  pageText: text,
+  screenshots: ["${screenshotDir}/01-search-results.png"]
+}) + "__RESULT_END__");
 `;
 
-  const fullScript = buildNavigationScript("gujrera-search", GUJRERA_SEARCH, bodyScript);
-
   try {
-    const raw = runDevBrowserScript(fullScript);
+    const raw = runDevBrowserScript(script, 120);
     const parsed = extractJsonResult(raw);
 
     if (!parsed) {
-      return errorResult(
-        "Could not parse search results from portal output",
-        [`${screenshotDir}/01-search-page.png`]
-      );
+      return errorResult("Could not parse search results from Gujarat RERA portal");
     }
 
-    // Attempt to extract structured project data from the snapshot
-    const projects = extractProjectsFromSnapshot(parsed.resultSnapshot);
+    const pageText = (parsed.pageText as string) || "";
+    const hasResults = pageText.includes("PROJECTS") || pageText.includes("View More");
+
+    // Extract basic project info from page text
+    const projects: Partial<ReraProject>[] = [];
+    if (hasResults) {
+      // Look for project names (they appear before "Project Start Date")
+      const projectBlocks = pageText.split("View More");
+      for (let i = 0; i < projectBlocks.length - 1; i++) {
+        const block = projectBlocks[i] || "";
+        const lines = block.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+
+        // Find project name (usually the last meaningful line before dates)
+        const startDateIdx = lines.findIndex(l => l.includes("Project Start Date"));
+        const projectName = startDateIdx > 0 ? lines[startDateIdx - 1] : undefined;
+
+        const startDate = block.match(/Project Start Date\s*:\s*(\S+)/)?.[1];
+        const endDate = block.match(/Project End Date\s*:\s*(\S+)/)?.[1];
+        const type = block.match(/Type\s*:\s*(\w+)/)?.[1];
+
+        projects.push({
+          projectName: projectName?.replace(/^PROJECTS\s*\(\d+\)\s*/, ""),
+          registrationDate: startDate,
+          completionDate: endDate,
+          projectType: type as ReraProject["projectType"],
+        });
+      }
+    }
 
     return successResult(
       {
         query,
-        searchType,
+        searchTerm,
+        found: hasResults,
+        projectCount: projects.length,
         projects,
-        rawSnapshot: parsed.resultSnapshot,
-        searchSubmitted: parsed.searchSubmitted,
+        rawText: pageText.substring(0, 2000),
       },
       (parsed.screenshots as string[]) || []
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-
-    // Check for common failure modes
-    if (message.includes("timeout") || message.includes("ETIMEDOUT")) {
+    if (message.includes("timed out") || message.includes("timeout")) {
       return errorResult(
-        `Gujarat RERA portal timed out. The portal may be temporarily unavailable. Query: "${query}"`,
-        [`${screenshotDir}/01-search-page.png`]
+        `Gujarat RERA portal timed out searching for "${searchTerm}". The portal may be slow — try again.`
       );
     }
-    if (message.includes("CAPTCHA") || message.includes("captcha")) {
-      return errorResult(
-        `Gujarat RERA portal is showing a CAPTCHA. Automated search cannot proceed. Query: "${query}"`,
-        [`${screenshotDir}/01-search-page.png`]
-      );
-    }
-
     return errorResult(`RERA search failed: ${message}`);
   }
 }
 
 /**
- * Get detailed project information from the Gujarat RERA portal.
- *
- * @param reraId - The RERA registration ID
- * @param purchaseId - Optional purchase ID for organizing screenshots
+ * Get full project details by searching and clicking "View More".
  */
 export async function getReraProjectDetails(
   reraId: string,
   purchaseId = "anonymous"
 ): Promise<PortalResult> {
   const screenshotDir = ensureOutputDir(purchaseId, "gujrera");
-  const safeReraId = reraId.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
 
-  // Try the direct project detail URL first, then fall back to search
-  const detailUrl = `${GUJRERA_BASE}/project-details/${encodeURIComponent(reraId)}`;
-
-  const bodyScript = `
-let screenshots = [];
-let detailSnapshot = null;
-
-// --- Screenshot the detail page ---
-try {
-  const shot = await page.screenshot();
-  saveScreenshot("${screenshotDir}/03-detail-page.png", shot);
-  screenshots.push("${screenshotDir}/03-detail-page.png");
-} catch (_) {}
-
-// --- Get snapshot for structured extraction ---
-try {
-  detailSnapshot = await page.snapshotForAI();
-} catch (_) {}
-
-// --- Check if we landed on a valid detail page ---
-let pageContent = "";
-try {
-  pageContent = await page.evaluate(() => document.body.innerText || "");
-} catch (_) {}
-
-const is404 = pageContent.includes("not found") ||
-              pageContent.includes("404") ||
-              pageContent.includes("No record");
-
-// If direct URL didn't work, try searching
-if (is404 || !pageContent || pageContent.length < 200) {
-  console.log("Direct URL failed, falling back to search...");
-
-  try {
-    await page.goto("${GUJRERA_SEARCH}", { waitUntil: "domcontentloaded", timeout: 30000 });
-  } catch (_) {
-    console.log("Search page navigation slow, continuing...");
-  }
-  await new Promise(r => setTimeout(r, 2000));
-
-  // Try to search by RERA ID
-  const inputSelectors = [
-    'input[name*="rera"]',
-    'input[name*="search"]',
-    'input[placeholder*="RERA"]',
-    'input[type="text"]',
-    '#txtReraNo',
-    '#searchInput',
-  ];
-
-  for (const sel of inputSelectors) {
-    try {
-      await page.fill(sel, '${safeReraId}');
-      console.log("Filled RERA ID in: " + sel);
-      break;
-    } catch (_) {}
+  // Extract short code for search
+  let searchTerm = reraId;
+  if (reraId.includes("/")) {
+    const parts = reraId.split("/");
+    const codePart = parts.find(p => /^[A-Z]{2,4}\d{3,}$/i.test(p));
+    if (codePart) searchTerm = codePart;
   }
 
-  // Submit search
-  const btnSelectors = [
-    'button[type="submit"]',
-    'input[type="submit"]',
-    'button:has-text("Search")',
-    '#btnSearch',
-  ];
-  for (const btn of btnSelectors) {
-    try {
-      await page.click(btn);
-      break;
-    } catch (_) {}
+  const safeQuery = searchTerm.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
+
+  const script = `
+const page = await browser.newPage();
+await page.goto("https://gujrera.gujarat.gov.in/", { timeout: 60000, waitUntil: "load" });
+await new Promise(r => setTimeout(r, 5000));
+
+// Dismiss all modals
+await page.evaluate(() => {
+  document.querySelectorAll('.modal, .modal-backdrop, .modal-dialog').forEach(el => el.remove());
+  document.body.classList.remove('modal-open');
+  document.body.style.overflow = 'auto';
+  document.querySelectorAll('.headingPdf, .homePageAnouncement').forEach(el => el.remove());
+});
+await new Promise(r => setTimeout(r, 1000));
+
+// Search for the project
+await page.evaluate((q) => {
+  const input = document.querySelector('input[placeholder*="Project"]');
+  if (input) {
+    input.value = q;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
   }
+}, '${safeQuery}');
+await new Promise(r => setTimeout(r, 2000));
 
-  await new Promise(r => setTimeout(r, 3000));
+await page.evaluate(() => {
+  const btn = document.querySelector('button.searchBtn');
+  if (btn) btn.click();
+});
+await new Promise(r => setTimeout(r, 8000));
 
-  // Try to click through to the detail page from results
-  const linkSelectors = [
-    'a:has-text("View")',
-    'a:has-text("Details")',
-    'a:has-text("${safeReraId}")',
-    'table tbody tr:first-child a',
-    '.project-link:first-child',
-    'a[href*="project-details"]',
-  ];
+// Click "View More" to get full details
+await page.evaluate(() => {
+  const links = Array.from(document.querySelectorAll('a, button, span'));
+  const viewMore = links.find(l => l.innerText && l.innerText.includes('View More'));
+  if (viewMore) viewMore.click();
+});
+await new Promise(r => setTimeout(r, 8000));
 
-  for (const link of linkSelectors) {
-    try {
-      await page.click(link);
-      console.log("Clicked detail link: " + link);
-      break;
-    } catch (_) {}
-  }
-
-  await new Promise(r => setTimeout(r, 3000));
-
-  // Re-capture after navigating to detail
-  try {
-    const shot2 = await page.screenshot();
-    saveScreenshot("${screenshotDir}/04-detail-via-search.png", shot2);
-    screenshots.push("${screenshotDir}/04-detail-via-search.png");
-  } catch (_) {}
-
-  try {
-    detailSnapshot = await page.snapshotForAI();
-  } catch (_) {}
-}
-
-// --- Attempt to extract specific data sections ---
-// Try to find and expand all tabs/sections on the detail page
-const tabSelectors = [
-  '.nav-tabs a',
-  '.tab-link',
-  'a[data-toggle="tab"]',
-  'button[data-toggle="tab"]',
-  '.accordion-header',
-];
-
-for (const tabSel of tabSelectors) {
-  try {
-    const tabs = await page.$$eval(tabSel, els => els.length);
-    for (let i = 0; i < tabs; i++) {
-      try {
-        const allTabs = await page.$$(tabSel);
-        if (allTabs[i]) {
-          await allTabs[i].click();
-          await new Promise(r => setTimeout(r, 500));
-        }
-      } catch (_) {}
-    }
-  } catch (_) {}
-}
-
-// Final comprehensive snapshot after expanding all sections
-let fullSnapshot = null;
+// Take screenshot of detail page
 try {
-  fullSnapshot = await page.snapshotForAI();
-} catch (_) {}
+  const buf = await page.screenshot({ fullPage: true });
+  await saveScreenshot(buf, "${screenshotDir}/02-project-details.png");
+} catch(e) {}
 
-try {
-  const finalShot = await page.screenshot();
-  saveScreenshot("${screenshotDir}/05-detail-expanded.png", finalShot);
-  screenshots.push("${screenshotDir}/05-detail-expanded.png");
-} catch (_) {}
+// Extract full page text
+const text = await page.evaluate(() => document.body.innerText);
+const url = page.url();
 
-const output = {
-  reraId: '${safeReraId}',
-  detailSnapshot: detailSnapshot,
-  fullSnapshot: fullSnapshot,
-  screenshots: screenshots,
-};
-
-console.log("__RESULT_START__" + JSON.stringify(output) + "__RESULT_END__");
+console.log("__RESULT_START__" + JSON.stringify({
+  url: url,
+  reraId: '${safeQuery}',
+  pageText: text,
+  screenshots: ["${screenshotDir}/02-project-details.png"]
+}) + "__RESULT_END__");
 `;
 
-  const fullScript = buildNavigationScript("gujrera-detail", detailUrl, bodyScript);
-
   try {
-    const raw = runDevBrowserScript(fullScript, 180000);
+    const raw = runDevBrowserScript(script, 120);
     const parsed = extractJsonResult(raw);
 
     if (!parsed) {
-      return errorResult(
-        `Could not parse detail results for RERA ID: ${reraId}`,
-        [`${screenshotDir}/03-detail-page.png`]
-      );
+      return errorResult(`Could not parse project details for RERA ID: ${reraId}`);
     }
 
-    // Extract structured detail from snapshot
-    const details = extractDetailFromSnapshot(parsed.fullSnapshot || parsed.detailSnapshot, reraId);
+    const pageText = (parsed.pageText as string) || "";
+    const isDetailPage = pageText.includes("PROJECT VIEW") || pageText.includes("GUJRERA Reg. No.");
+
+    // Extract structured data from the detail page text
+    const details = extractDetailsFromText(pageText, reraId);
 
     return successResult(
       {
         reraId,
+        found: isDetailPage,
         details,
-        rawSnapshot: parsed.fullSnapshot || parsed.detailSnapshot,
+        rawText: pageText.substring(0, 5000),
       },
       (parsed.screenshots as string[]) || []
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-
-    if (message.includes("timeout") || message.includes("ETIMEDOUT")) {
+    if (message.includes("timed out") || message.includes("timeout")) {
       return errorResult(
-        `Gujarat RERA portal timed out while fetching details for ${reraId}. The portal may be temporarily unavailable.`
+        `Gujarat RERA portal timed out fetching details for "${reraId}". Try again.`
       );
     }
-
-    return errorResult(`RERA detail fetch failed for ${reraId}: ${message}`);
+    return errorResult(`RERA detail fetch failed: ${message}`);
   }
 }
 
@@ -415,10 +267,6 @@ console.log("__RESULT_START__" + JSON.stringify(output) + "__RESULT_END__");
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Extract the JSON result object from dev-browser console output.
- * The script wraps its output in __RESULT_START__ ... __RESULT_END__ markers.
- */
 function extractJsonResult(raw: string): Record<string, unknown> | null {
   const startMarker = "__RESULT_START__";
   const endMarker = "__RESULT_END__";
@@ -435,79 +283,40 @@ function extractJsonResult(raw: string): Record<string, unknown> | null {
   }
 }
 
-/**
- * Best-effort extraction of project list from a snapshot.
- * The snapshot is AI-optimized structured data; we look for table rows or
- * repeated card-like structures that contain RERA IDs.
- *
- * This returns partial ReraProject objects — Claude will refine them using
- * the raw snapshot when needed.
- */
-function extractProjectsFromSnapshot(
-  snapshot: unknown
-): Partial<ReraProject>[] {
-  if (!snapshot) return [];
+function extractDetailsFromText(text: string, reraId: string): Record<string, unknown> {
+  const extract = (pattern: RegExp): string | undefined => {
+    const match = text.match(pattern);
+    return match?.[1]?.trim();
+  };
 
-  const text = typeof snapshot === "string" ? snapshot : JSON.stringify(snapshot);
-
-  // Look for RERA ID patterns (e.g., PR/GJ/AHMEDABAD/AHMEDABAD CITY/RAAXXXX/...)
-  const reraPattern = /PR\/GJ\/[A-Z\/]+\/\w+\/\d+/g;
-  const matches = text.match(reraPattern) || [];
-  const uniqueIds = [...new Set(matches)];
-
-  return uniqueIds.map((id) => ({
-    reraId: id,
-    projectName: undefined,
-    builderName: undefined,
-    projectStatus: undefined,
-  }));
-}
-
-/**
- * Best-effort extraction of detail fields from a snapshot.
- * Returns a partial ReraProjectDetail — Claude interprets the full snapshot
- * for complete data.
- */
-function extractDetailFromSnapshot(
-  snapshot: unknown,
-  reraId: string
-): Partial<ReraProjectDetail> {
-  if (!snapshot) {
-    return { reraId };
-  }
-
-  const text = typeof snapshot === "string" ? snapshot : JSON.stringify(snapshot);
-  const detail: Partial<ReraProjectDetail> = { reraId };
-
-  // Try to extract common fields via simple pattern matching
-  const patterns: Array<[keyof ReraProjectDetail, RegExp]> = [
-    ["projectName", /project\s*name[:\s]+([^\n,]+)/i],
-    ["builderName", /(?:promoter|builder|developer)\s*name[:\s]+([^\n,]+)/i],
-    ["projectStatus", /(?:project\s*)?status[:\s]+([^\n,]+)/i],
-    ["registrationDate", /registration\s*date[:\s]+([^\n,]+)/i],
-    ["expiryDate", /(?:expiry|validity)\s*date[:\s]+([^\n,]+)/i],
-    ["completionDate", /(?:completion|expected\s*completion)\s*date[:\s]+([^\n,]+)/i],
-    ["lastUpdated", /(?:last\s*updated|updated\s*on)[:\s]+([^\n,]+)/i],
-  ];
-
-  for (const [field, regex] of patterns) {
-    const match = text.match(regex);
-    if (match?.[1]) {
-      (detail as Record<string, unknown>)[field] = match[1].trim();
-    }
-  }
-
-  // Try to extract total units
-  const unitsMatch = text.match(/total\s*(?:units|flats|apartments)[:\s]+(\d+)/i);
-  if (unitsMatch?.[1]) {
-    detail.totalUnits = parseInt(unitsMatch[1], 10);
-  }
-
-  // Try to extract complaints count
-  const complaintsMatch = text.match(/complaints?[:\s]+(\d+)/i);
-  if (complaintsMatch?.[1]) {
-    detail.complaints = parseInt(complaintsMatch[1], 10);
-  }
-
-  return detail;
+  return {
+    reraId,
+    reraRegNo: extract(/GUJRERA Reg\. No\.\s*:?\s*-?\s*(.+?)(?:\n|View)/),
+    projectName: extract(/Project Name\s*:?\s*-?\s*(.+?)(?:\n|GUJRERA)/),
+    projectAddress: extract(/Project Address\s*:?\s*-?\s*(.+?)(?:\n|Taluka)/),
+    taluka: extract(/Taluka\s*:?\s*-?\s*(.+?)(?:,|\n)/),
+    district: extract(/District\s*:?\s*-?\s*(.+?)(?:,|\n)/),
+    projectType: extract(/Project Type\s*:?\s*-?\s*(\w+)/),
+    aboutProperty: extract(/About Property\s*:?\s*-?\s*(.+?)(?:\n|Project Start)/),
+    projectStartDate: extract(/Project Start Date\s*:?\s*-?\s*(\S+)/),
+    projectEndDate: extract(/Project End Date\s*:?\s*-?\s*(\S+)/),
+    landArea: extract(/Project Land Area\s*:?\s*-?\s*(.+?)(?:\n|Total)/),
+    totalOpenArea: extract(/Total Open Area\s*:?\s*-?\s*([\d,.]+\s*Sq\s*\w+)/),
+    totalCoveredArea: extract(/Total Covered Area\s*:?\s*-?\s*([\d,.]+\s*Sq\s*\w+)/),
+    carpetAreaRange: extract(/Carpet Area.*?Range.*?:?\s*-?\s*([\d.]+\s*Sq\s*\w+\s*-\s*[\d.]+\s*Sq\s*\w+)/),
+    planPassingAuthority: extract(/Plan Passing Authority\s*:?\s*-?\s*(.+?)(?:\n|Redevelopment)/),
+    redevelopment: extract(/Redevelopment Project\s*:?\s*-?\s*(\w+)/),
+    affordableHousing: extract(/Affordable Housing\s*:?\s*-?\s*(\w+)/),
+    promoterName: extract(/Promoter Name\s*:?\s*-?\s*(.+?)(?:\n|Promoter Type)/),
+    promoterType: extract(/Promoter Type\s*:?\s*-?\s*(.+?)(?:\n|Office)/),
+    estimatedCost: extract(/Project Estimated Cost.*?:?\s*-?\s*([\d,]+)/),
+    loanPercentage: extract(/Percentage Loan.*?:?\s*-?\s*(.+?)(?:\n|%)/),
+    quarterlyCompliance: extract(/Total Quarterly Compliance Required\s*:?\s*-?\s*(\d+)/),
+    quarterliesComplied: extract(/Total Complied Quarters\s*:?\s*-?\s*(\d+)/),
+    quarterlyDefaulted: extract(/Total Quarterly Compliance Defaulted\s*:?\s*-?\s*(\w+)/),
+    annualCompliance: extract(/Total Annual Compliance Required\s*:?\s*-?\s*(\d+)/),
+    annualsComplied: extract(/Total Complied Annual Compliance\s*:?\s*-?\s*(\d+)/),
+    annualDefaulted: extract(/Total Annual Compliance Defaulted\s*:?\s*-?\s*(\w+)/),
+    constructionProgress: extract(/Block Progress.*?:?\s*([\d.]+)\s*%/),
+  };
 }
