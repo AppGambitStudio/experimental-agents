@@ -94,12 +94,103 @@ const TOOL_DISPLAY: Record<string, string> = {
   "mcp__legal-kb-mcp__get_required_clauses": "📝 Checking required clauses",
   "mcp__legal-kb-mcp__get_stamp_duty": "🏛️  Calculating stamp duty",
   "mcp__legal-kb-mcp__check_enforceability": "🔍 Checking enforceability",
+  "mcp__legal-kb-mcp__review_report": "🔎 Running critic review",
+  "mcp__legal-kb-mcp__get_applicable_regulations": "📜 Checking regulatory compliance",
+  "mcp__legal-kb-mcp__get_contract_limitations": "⚠️  Loading analysis limitations",
   "mcp__contract-mcp__create_contract": "📁 Creating contract record",
   "mcp__contract-mcp__add_version": "📎 Adding version",
   "mcp__contract-mcp__store_analysis": "💾 Storing analysis",
   "mcp__contract-mcp__get_previous_analysis": "📊 Loading previous analysis",
   "mcp__contract-mcp__get_contract_timeline": "📈 Loading timeline",
 };
+
+// --- Slash Commands ---
+
+interface SlashCommand {
+  name: string;
+  description: string;
+  prompt: string | ((args: string) => string);
+}
+
+const SLASH_COMMANDS: SlashCommand[] = [
+  {
+    name: "/summary",
+    description: "Concise findings with risk score and top 3 negotiation items",
+    prompt:
+      "Give me a concise summary of all findings so far — risk score, critical items, and top 3 things to negotiate first.",
+  },
+  {
+    name: "/risks",
+    description: "All critical and high-risk clauses with law references",
+    prompt:
+      "List ALL critical and high-risk clauses found so far. For each: quote the original text, state the risk level, cite the applicable Indian law, and explain why it matters in plain language.",
+  },
+  {
+    name: "/playbook",
+    description: "Full negotiation playbook, priority-ordered",
+    prompt:
+      "Generate a complete negotiation playbook based on all the risks we've discussed. Priority-ordered, with specific talking points and alternative clause language for each item.",
+  },
+  {
+    name: "/redline",
+    description: "Redlined version with original vs suggested text",
+    prompt:
+      "Generate a redlined version — for each flagged clause, show the original text and the suggested replacement text side by side.",
+  },
+  {
+    name: "/stamp-duty",
+    description: "Calculate stamp duty for this contract",
+    prompt:
+      "Calculate the stamp duty for this contract using get_stamp_duty. Show the duty amount, whether e-stamping is available, registration requirements, and penalty for deficiency.",
+  },
+  {
+    name: "/checklist",
+    description: "Required clauses for this contract type",
+    prompt:
+      "Use get_required_clauses to show me the complete checklist of clauses required for this contract type. Mark which ones are present and which are missing.",
+  },
+  {
+    name: "/enforceability",
+    description: "Check enforceability of a specific clause type",
+    prompt: (clauseType: string) =>
+      clauseType
+        ? `Use check_enforceability to analyze the enforceability of the "${clauseType}" clause under Indian law. Include applicable sections, case law, and practical implications.`
+        : "Which clause type do you want to check enforceability for? Options: non_compete, indemnity, penalty, moral_rights, governing_law, arbitration, termination.",
+  },
+  {
+    name: "/compare",
+    description: "Compare with previous version (if version exists)",
+    prompt:
+      "Use get_previous_analysis to load the previous version's analysis. Compare it with the current analysis — what changed? What improved? What got worse? Show a diff of key changes.",
+  },
+  {
+    name: "/dossier",
+    description: "Final analysis report for legal team",
+    prompt:
+      "Generate a final analysis dossier suitable for sharing with the legal team. Include: executive summary, risk score, clause-by-clause analysis, missing clauses, stamp duty, regulatory compliance, negotiation playbook, and the full limitations disclaimer. Before presenting, run a critic review to validate completeness.",
+  },
+  {
+    name: "/next-steps",
+    description: "Top 5 prioritized actions",
+    prompt:
+      "Based on everything we've found so far, give me a prioritized list of the top 5 things I should do next. What's urgent? What can wait? What needs a lawyer? Be specific and actionable.",
+  },
+  {
+    name: "/help",
+    description: "Show all available commands",
+    prompt: "", // handled separately
+  },
+];
+
+function showHelp(): void {
+  console.log(`\n${c.cyan}${c.bold}Available Commands:${c.reset}\n`);
+  for (const cmd of SLASH_COMMANDS) {
+    if (cmd.name === "/help") continue;
+    console.log(`  ${c.green}${cmd.name.padEnd(22)}${c.reset}${cmd.description}`);
+  }
+  console.log(`  ${c.green}${"/quit".padEnd(22)}${c.reset}End the session`);
+  console.log(`\n${c.dim}You can also type any question in plain language.${c.reset}\n`);
+}
 
 // ANSI colors
 const c = {
@@ -140,7 +231,7 @@ export async function startCopilot(options: CopilotOptions): Promise<void> {
 ${c.cyan}${c.bold}╔══════════════════════════════════════════════════════════════╗
 ║  Legal Contract Copilot — Interactive Mode                   ║
 ║  Analyzing: ${options.filePath.split("/").pop()?.slice(0, 46).padEnd(46)}║
-║  Type 'quit' to exit, 'playbook' for negotiation playbook    ║
+║  Type /help for commands, /quit to exit                      ║
 ╚══════════════════════════════════════════════════════════════╝${c.reset}
 `);
 
@@ -248,7 +339,23 @@ Remember: this is a conversation, not a report. Keep the first response concise 
 
     if (!userInput) continue;
 
-    if (userInput.toLowerCase() === "quit" || userInput.toLowerCase() === "exit") {
+    const inputLower = userInput.toLowerCase();
+
+    // Legacy command support — map old commands to slash commands
+    const legacyMap: Record<string, string> = {
+      playbook: "/playbook",
+      summary: "/summary",
+      redline: "/redline",
+      help: "/help",
+    };
+    const normalized = legacyMap[inputLower] ?? userInput;
+
+    if (inputLower === "help" || inputLower === "/help") {
+      showHelp();
+      continue;
+    }
+
+    if (inputLower === "quit" || inputLower === "exit" || inputLower === "/quit") {
       console.log(`\n${c.dim}Session ended. ${turnCount} turns.${c.reset}`);
       if (sessionId) {
         console.log(`${c.dim}Session ID: ${sessionId} (can be resumed later)${c.reset}`);
@@ -256,36 +363,32 @@ Remember: this is a conversation, not a report. Keep the first response concise 
       break;
     }
 
-    if (userInput.toLowerCase() === "playbook") {
+    // Slash command routing
+    const slashInput = normalized.startsWith("/") ? normalized : userInput;
+    const slashCmd = slashInput.toLowerCase();
+    const slashCommand = SLASH_COMMANDS.find(
+      (sc) => slashCmd === sc.name || slashCmd.startsWith(sc.name + " ")
+    );
+
+    if (slashCommand) {
+      const args = slashInput.slice(slashCommand.name.length).trim();
+      const prompt =
+        typeof slashCommand.prompt === "function"
+          ? slashCommand.prompt(args)
+          : slashCommand.prompt;
       try {
-        await runTurn(
-          "Generate a complete negotiation playbook based on all the risks we've discussed. Priority-ordered, with specific talking points and alternative clause language for each item."
-        );
+        await runTurn(prompt);
       } catch (error) {
         console.error(`\n${c.red}Error:${c.reset}`, error);
       }
       continue;
     }
 
-    if (userInput.toLowerCase() === "summary") {
-      try {
-        await runTurn(
-          "Give me a concise summary of all findings so far — risk score, critical items, and top 3 things to negotiate first."
-        );
-      } catch (error) {
-        console.error(`\n${c.red}Error:${c.reset}`, error);
-      }
-      continue;
-    }
-
-    if (userInput.toLowerCase() === "redline") {
-      try {
-        await runTurn(
-          "Generate a redlined version — for each flagged clause, show the original text and the suggested replacement text side by side."
-        );
-      } catch (error) {
-        console.error(`\n${c.red}Error:${c.reset}`, error);
-      }
+    // Unknown slash command detection
+    if (slashCmd.startsWith("/") && slashCmd !== "/help") {
+      console.log(
+        `\n${c.yellow}Unknown command: ${slashCmd}. Type /help for available commands.${c.reset}\n`
+      );
       continue;
     }
 

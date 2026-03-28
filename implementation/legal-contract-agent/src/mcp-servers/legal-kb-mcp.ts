@@ -6,6 +6,10 @@ import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { CLAUSE_PATTERNS } from "../knowledge-base/clause-patterns.js";
 import { lookupStampDuty, STAMP_DUTY_MATRIX } from "../knowledge-base/stamp-duty.js";
+import { getApplicableRegulations, formatComplianceChecklist } from "../knowledge-base/regulatory-compliance.js";
+import { getContractLimitations, formatLimitationsDisclaimer } from "../knowledge-base/negative-constraints.js";
+import { runCriticReview, formatCriticReview } from "../knowledge-base/critic.js";
+import type { ClauseAnalysis, ContractType, RiskLevel, ClauseCategory } from "../types/index.js";
 
 const searchClausePatternsTool = tool(
   "search_clause_patterns",
@@ -306,6 +310,138 @@ function getPatternKeywords(pattern: typeof CLAUSE_PATTERNS[number]): string[] {
   return keywordMap[pattern.id] ?? [];
 }
 
+const getApplicableRegulationsTool = tool(
+  "get_applicable_regulations",
+  "Check which Indian regulations apply to this contract — DPDPA 2023, FEMA, Labor Codes, GST, Companies Act, Arbitration Act. Returns required clauses and penalties for non-compliance.",
+  {
+    contract_type: z.string().describe("Contract type: msa, nda, employment, freelancer, lease, etc."),
+    has_personal_data: z.boolean().describe("Does the contract involve processing personal data?"),
+    has_cross_border: z.boolean().describe("Does the contract involve cross-border payments or a foreign entity?"),
+    contract_value: z.number().optional().describe("Contract value in INR (for threshold-based regulations)"),
+  },
+  async ({ contract_type, has_personal_data, has_cross_border, contract_value }) => {
+    const regulations = getApplicableRegulations(
+      contract_type as ContractType,
+      has_personal_data,
+      has_cross_border,
+      contract_value
+    );
+    const checklist = formatComplianceChecklist(regulations);
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            total_applicable: regulations.length,
+            regulations: regulations.map((r) => ({
+              id: r.id,
+              regulation: r.regulation,
+              short_name: r.shortName,
+              applicable_when: r.applicableWhen,
+              required_clauses: r.requiredClauses,
+              penalty: r.penaltyForNonCompliance,
+            })),
+            formatted_checklist: checklist,
+          }),
+        },
+      ],
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
+const getContractLimitationsTool = tool(
+  "get_contract_limitations",
+  "Get a list of what this agent CANNOT verify about contracts. MANDATORY disclaimer that must be included in every analysis report. Covers signature verification, entity existence, undisclosed amendments, commercial reasonableness.",
+  {
+    phase: z.string().optional().describe("Filter by analysis phase (omit for all limitations)"),
+  },
+  async ({ phase }) => {
+    const limitations = getContractLimitations(phase);
+    const disclaimer = formatLimitationsDisclaimer(phase);
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            phase: phase ?? "all",
+            total_limitations: limitations.length,
+            critical_count: limitations.filter((l) => l.severity === "critical").length,
+            limitations: limitations.map((l) => ({
+              id: l.id,
+              limitation: l.limitation,
+              severity: l.severity,
+              reason: l.reason,
+              user_action: l.whatUserShouldDo,
+            })),
+            formatted_disclaimer: disclaimer,
+            note: "ALWAYS include this disclaimer in analysis reports.",
+          }),
+        },
+      ],
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
+const reviewReportTool = tool(
+  "review_report",
+  "Critic / Reflection tool — reviews the contract analysis report BEFORE presenting to the user. Checks for coverage gaps, missing disclaimers, hallucinated law citations, risk rating inconsistencies. Returns APPROVED/REVISE verdict with specific issues to fix. ALWAYS call this before presenting a final summary or dossier.",
+  {
+    report_content: z.string().describe("The full text of the analysis report you are about to present"),
+    clause_analyses: z.array(
+      z.object({
+        clauseNumber: z.string(),
+        clauseTitle: z.string(),
+        category: z.string(),
+        riskLevel: z.string(),
+        riskExplanation: z.string(),
+        applicableLaws: z.array(z.string()),
+        isMissingClause: z.boolean(),
+      })
+    ).describe("Array of clause analyses from the review"),
+    contract_type: z.string().describe("Contract type: msa, nda, employment, etc."),
+  },
+  async ({ report_content, clause_analyses, contract_type }) => {
+    const typedClauses = clause_analyses.map((c) => ({
+      ...c,
+      category: c.category as ClauseCategory,
+      riskLevel: c.riskLevel as RiskLevel,
+      originalText: "",
+      riskExplanationBusiness: "",
+      suggestedAlternative: undefined,
+      negotiationPoint: undefined,
+    })) as ClauseAnalysis[];
+
+    const review = runCriticReview(report_content, typedClauses, contract_type as ContractType);
+    const formatted = formatCriticReview(review);
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            verdict: review.verdict,
+            overall_quality: review.overallQuality,
+            coverage_score: review.coverageScore,
+            completeness_score: review.completenessScore,
+            total_issues: review.totalIssues,
+            critical_issues: review.criticalIssues,
+            issues: review.issues,
+            formatted_review: formatted,
+            instructions: review.verdict === "REVISE"
+              ? "REVISE the report to address the issues listed above, then call review_report again. Max 2 revision rounds."
+              : "Report is APPROVED. Present it to the user with confidence.",
+          }),
+        },
+      ],
+    };
+  },
+  { annotations: { readOnlyHint: true } }
+);
+
 export const legalKbMcp = createSdkMcpServer({
   name: "legal-kb-mcp",
   tools: [
@@ -313,5 +449,8 @@ export const legalKbMcp = createSdkMcpServer({
     getRequiredClausesTool,
     getStampDutyTool,
     checkEnforceabilityTool,
+    getApplicableRegulationsTool,
+    getContractLimitationsTool,
+    reviewReportTool,
   ],
 });
