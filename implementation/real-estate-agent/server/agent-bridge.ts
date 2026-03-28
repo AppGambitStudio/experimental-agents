@@ -38,6 +38,18 @@ const TOOL_DISPLAY: Record<string, string> = {
   "mcp__property-kb-mcp__get_verification_limitations": "Loading verification limitations",
   "mcp__property-kb-mcp__review_report": "Running critic review on report",
 
+  // chrome-devtools (CAPTCHA fallback — browser automation)
+  "mcp__chrome-devtools__navigate_page": "Navigating browser to portal",
+  "mcp__chrome-devtools__take_screenshot": "Taking browser screenshot",
+  "mcp__chrome-devtools__take_snapshot": "Reading page structure",
+  "mcp__chrome-devtools__click": "Clicking element on page",
+  "mcp__chrome-devtools__fill": "Filling form field",
+  "mcp__chrome-devtools__new_page": "Opening new browser page",
+  "mcp__chrome-devtools__list_pages": "Listing browser pages",
+  "mcp__chrome-devtools__select_page": "Selecting browser page",
+  "mcp__chrome-devtools__evaluate_script": "Running script on page",
+  "mcp__chrome-devtools__wait_for": "Waiting for page element",
+
   // tracker-mcp (purchase tracking)
   "mcp__tracker-mcp__create_purchase": "Registering purchase",
   "mcp__tracker-mcp__log_verification": "Logging verification step",
@@ -91,6 +103,14 @@ export function runAgentTurn(options: RunTurnOptions): EventEmitter {
             "browser-mcp": browserMcp,
             "property-kb-mcp": propertyKbMcp,
             "tracker-mcp": trackerMcp,
+            // Chrome DevTools MCP — external stdio server for CAPTCHA fallback
+            // Provides browser automation tools (navigate, click, fill, screenshot)
+            // that work with the user's actual Chrome browser
+            "chrome-devtools": {
+              type: "stdio" as const,
+              command: "npx",
+              args: ["chrome-devtools-mcp@latest"],
+            },
           },
           model: "sonnet",
           permissionMode: "bypassPermissions",
