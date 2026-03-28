@@ -265,7 +265,7 @@ app.get("/:id/stream", (c) => {
       }
 
       // Poll interval — 500ms between checks
-      await stream.sleep(500);
+      await stream.sleep(100);
     }
   });
 });

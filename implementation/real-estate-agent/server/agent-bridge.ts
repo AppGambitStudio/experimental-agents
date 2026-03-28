@@ -108,8 +108,7 @@ export function runAgentTurn(options: RunTurnOptions): EventEmitter {
             // that work with the user's actual Chrome browser
             "chrome-devtools": {
               type: "stdio" as const,
-              command: "npx",
-              args: ["chrome-devtools-mcp@latest"],
+              command: "chrome-devtools-mcp",
             },
           },
           model: "sonnet",
@@ -141,7 +140,7 @@ export function runAgentTurn(options: RunTurnOptions): EventEmitter {
           }
         }
 
-        // Emit tool_call events for tool_use content blocks
+        // Emit tool_call AND intermediate text from assistant messages
         if (
           "type" in message &&
           message.type === "assistant" &&
@@ -154,6 +153,7 @@ export function runAgentTurn(options: RunTurnOptions): EventEmitter {
                 type: string;
                 name?: string;
                 input?: unknown;
+                text?: string;
               }>;
             };
           };
@@ -171,11 +171,20 @@ export function runAgentTurn(options: RunTurnOptions): EventEmitter {
                   timestamp: new Date().toISOString(),
                 } satisfies AgentEvent);
               }
+              // Stream intermediate text blocks as they arrive
+              // This makes responses appear progressively instead of all-at-once
+              if (block.type === "text" && block.text) {
+                emitter.emit("event", {
+                  type: "text",
+                  text: block.text,
+                  timestamp: new Date().toISOString(),
+                } satisfies AgentEvent);
+              }
             }
           }
         }
 
-        // Emit text + done on result
+        // Emit done on result (text was already streamed from assistant messages)
         if ("type" in message && message.type === "result") {
           const resultMsg = message as {
             type: "result";
@@ -185,20 +194,14 @@ export function runAgentTurn(options: RunTurnOptions): EventEmitter {
             total_cost_usd?: number;
           };
 
-          if (resultMsg.subtype === "success" && resultMsg.result) {
-            emitter.emit("event", {
-              type: "text",
-              text: resultMsg.result,
-              timestamp: new Date().toISOString(),
-            } satisfies AgentEvent);
-
+          if (resultMsg.subtype === "success") {
             emitter.emit("event", {
               type: "done",
               numTurns: resultMsg.num_turns,
               costUsd: resultMsg.total_cost_usd,
               timestamp: new Date().toISOString(),
             } satisfies AgentEvent);
-          } else if (resultMsg.subtype !== "success") {
+          } else {
             emitter.emit("event", {
               type: "error",
               error: `Agent returned non-success result: ${resultMsg.subtype}`,

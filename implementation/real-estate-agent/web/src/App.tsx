@@ -12,6 +12,7 @@ function App() {
   const [activeTools, setActiveTools] = useState<ToolCallEvent[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const currentMsgIdRef = useRef<string | null>(null);
 
   // Restore session from localStorage on mount
   useEffect(() => {
@@ -56,18 +57,33 @@ function App() {
 
     es.addEventListener("text", (e) => {
       const data = JSON.parse(e.data);
+      const newText = data.text ?? data.content ?? "";
+      if (!newText) return;
       setActiveTools([]);
-      setIsProcessing(false);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "agent",
-          content: data.text ?? data.content ?? "",
-          timestamp: new Date().toISOString(),
-        },
-      ]);
       setPhase("chat");
+
+      const msgId = currentMsgIdRef.current;
+      if (msgId) {
+        // Append to current streaming message
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msgId ? { ...m, content: m.content + newText } : m
+          )
+        );
+      } else {
+        // Start a new agent message
+        const newId = crypto.randomUUID();
+        currentMsgIdRef.current = newId;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: newId,
+            role: "agent" as const,
+            content: newText,
+            timestamp: new Date().toISOString(),
+          },
+        ]);
+      }
     });
 
     es.addEventListener("history", (e) => {
@@ -86,6 +102,7 @@ function App() {
     es.addEventListener("done", () => {
       setActiveTools([]);
       setIsProcessing(false);
+      currentMsgIdRef.current = null; // next text event starts a new message
     });
 
     es.addEventListener("error", (e) => {
@@ -156,6 +173,7 @@ function App() {
     async (content: string) => {
       if (!sessionId) return;
 
+      currentMsgIdRef.current = null; // next agent response starts a new bubble
       setMessages((prev) => [
         ...prev,
         {
