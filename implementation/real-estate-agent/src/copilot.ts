@@ -192,6 +192,102 @@ const c = {
   red: "\x1b[31m",
 };
 
+// --- Slash Commands ---
+
+interface SlashCommand {
+  name: string;
+  description: string;
+  prompt: string | ((args: string) => string);
+}
+
+const SLASH_COMMANDS: SlashCommand[] = [
+  {
+    name: "/summary",
+    description: "Concise summary of all findings with risk rating",
+    prompt:
+      "Give me a concise summary of all findings so far — overall risk rating, critical items, and top 3 things I should do next. Before presenting, call review_report to validate the summary against the verification log.",
+  },
+  {
+    name: "/risks",
+    description: "All critical and high-severity risks",
+    prompt:
+      "Run a full red flag check using check_red_flags based on everything we've verified so far. List ALL critical and high-severity risks. For each: what is it, why does it matter, and what should I do?",
+  },
+  {
+    name: "/cost",
+    description: "Recalculate total cost of ownership",
+    prompt:
+      "Recalculate the total cost of ownership using calculate_total_cost. If I haven't provided all details yet, ask me for: total agreed price, declared value (bank payment), carpet area, maintenance deposit, parking charges, and whether it's under construction. Then show the complete breakdown with the REAL total outflow.",
+  },
+  {
+    name: "/dossier",
+    description: "Generate final due diligence report for your lawyer",
+    prompt:
+      "Generate a final due diligence dossier ready for sharing with my lawyer. Include: property overview, RERA status, litigation findings, land records, document verification, financial analysis, red flags, and verification limitations disclaimer. Before presenting, call review_report to validate completeness. Format it as a clean, professional report.",
+  },
+  {
+    name: "/documents",
+    description: "Document checklist for this property type",
+    prompt:
+      "Show me the complete document checklist for this property type using get_required_documents. Mark which documents we've already verified and which are still pending.",
+  },
+  {
+    name: "/verify",
+    description: "Deep-dive into a specific portal's findings",
+    prompt: (portal: string) =>
+      portal
+        ? `Show me all verification details from the ${portal} portal. Use get_verification_log and filter for ${portal} entries. Include: what was checked, results, any red flags, and screenshots taken.`
+        : "Which portal do you want to deep-dive into? Options: RERA, eCourts, AnyRoR, GARVI, SMC, GSTN.",
+  },
+  {
+    name: "/compare-jantri",
+    description: "Compare agreed price vs government jantri rate",
+    prompt:
+      "Compare the agreed price against the jantri (government ready reckoner) rate using get_jantri_rate. What's the difference? What does this mean for stamp duty calculation? Is the price fair for this area?",
+  },
+  {
+    name: "/timeline",
+    description: "Registration process timeline with steps",
+    prompt:
+      "Walk me through the registration timeline step-by-step using get_registration_guide. What do I do first? How long does each step take? What documents do I need on registration day?",
+  },
+  {
+    name: "/postpurchase",
+    description: "Post-registration formalities checklist",
+    prompt:
+      "After registration, what are all the formalities I need to complete? Use get_post_purchase_checklist to show me the complete list with timelines, ordered by priority (mandatory first).",
+  },
+  {
+    name: "/next-steps",
+    description: "Top 5 prioritized action items",
+    prompt:
+      "Based on everything we've found so far, give me a prioritized list of the top 5 things I need to do next. What's urgent? What can wait? What needs a lawyer? Be specific and actionable.",
+  },
+  {
+    name: "/check-builder",
+    description: "Deep-dive into builder's track record",
+    prompt: (builderName: string) =>
+      builderName
+        ? `Search for all projects by builder "${builderName}" on GujRERA using search_rera_project. How many projects have they done? Any complaints? What's their track record?`
+        : "What's the builder's name? I'll search their RERA track record.",
+  },
+  {
+    name: "/help",
+    description: "Show all available commands",
+    prompt: "", // handled separately
+  },
+];
+
+function showHelp(): void {
+  console.log(`\n${c.cyan}${c.bold}Available Commands:${c.reset}\n`);
+  for (const cmd of SLASH_COMMANDS) {
+    if (cmd.name === "/help") continue;
+    console.log(`  ${c.green}${cmd.name.padEnd(20)}${c.reset}${cmd.description}`);
+  }
+  console.log(`  ${c.green}${"/quit".padEnd(20)}${c.reset}End the session`);
+  console.log(`\n${c.dim}You can also type any question in plain language.${c.reset}\n`);
+}
+
 export interface CopilotOptions {
   reraId?: string;
   address: string;
@@ -219,7 +315,7 @@ export async function startCopilot(options: CopilotOptions): Promise<void> {
 ${c.cyan}${c.bold}+--------------------------------------------------------------+
 |  Real Estate Transaction Copilot — Interactive Mode          |
 |  Property: ${shortAddress.padEnd(47)}|
-|  Commands: summary, red-flags, documents, quit               |
+|  Commands: /help, /summary, /cost, /risks, /dossier, /quit    |
 +--------------------------------------------------------------+${c.reset}
 `);
 
@@ -329,7 +425,22 @@ Remember: this is a conversation, not a report. Keep the first response concise 
 
     if (!userInput) continue;
 
-    if (userInput.toLowerCase() === "quit" || userInput.toLowerCase() === "exit") {
+    // Support legacy commands without slash prefix
+    const inputLower = userInput.toLowerCase();
+    const legacyMap: Record<string, string> = {
+      summary: "/summary",
+      "red-flags": "/risks",
+      documents: "/documents",
+      help: "/help",
+    };
+    const normalized = legacyMap[inputLower] ?? userInput;
+
+    if (inputLower === "help" || inputLower === "/help") {
+      showHelp();
+      continue;
+    }
+
+    if (inputLower === "quit" || inputLower === "exit" || inputLower === "/quit") {
       console.log(`\n${c.dim}Session ended. ${turnCount} turns.${c.reset}`);
       if (sessionId) {
         console.log(`${c.dim}Session ID: ${sessionId} (can be resumed later)${c.reset}`);
@@ -337,36 +448,29 @@ Remember: this is a conversation, not a report. Keep the first response concise 
       break;
     }
 
-    if (userInput.toLowerCase() === "summary") {
+    // Slash command routing
+    const slashInput = normalized.startsWith("/") ? normalized : userInput;
+    const slashCmd = slashInput.toLowerCase();
+    const slashCommand = SLASH_COMMANDS.find(
+      (sc) => slashCmd === sc.name || slashCmd.startsWith(sc.name + " ")
+    );
+
+    if (slashCommand) {
+      const args = slashInput.slice(slashCommand.name.length).trim();
+      const prompt = typeof slashCommand.prompt === "function"
+        ? slashCommand.prompt(args)
+        : slashCommand.prompt;
       try {
-        await runTurn(
-          "Give me a concise summary of all findings so far — overall risk rating, critical items, and top 3 things I should do next."
-        );
+        await runTurn(prompt);
       } catch (error) {
         console.error(`\n${c.red}Error:${c.reset}`, error);
       }
       continue;
     }
 
-    if (userInput.toLowerCase() === "red-flags") {
-      try {
-        await runTurn(
-          "Run a full red flag check on this property based on everything we've verified so far. Show me all triggered red flags with severity and what I should do about each one."
-        );
-      } catch (error) {
-        console.error(`\n${c.red}Error:${c.reset}`, error);
-      }
-      continue;
-    }
-
-    if (userInput.toLowerCase() === "documents") {
-      try {
-        await runTurn(
-          "Show me the complete document checklist for this property type. Mark which documents we've already verified and which are still pending."
-        );
-      } catch (error) {
-        console.error(`\n${c.red}Error:${c.reset}`, error);
-      }
+    // Show help for unknown slash commands
+    if (slashCmd.startsWith("/") && slashCmd !== "/help") {
+      console.log(`\n${c.yellow}Unknown command: ${slashCmd}. Type /help for available commands.${c.reset}\n`);
       continue;
     }
 
