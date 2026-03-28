@@ -16,14 +16,14 @@ function App() {
 
     es.addEventListener("session_id", (e) => {
       const data = JSON.parse(e.data);
-      setSessionId(data.session_id);
+      setSessionId(data.sessionId ?? data.session_id);
     });
 
     es.addEventListener("tool_call", (e) => {
       const data = JSON.parse(e.data);
       setActiveTools((prev) => [
         ...prev,
-        { tool: data.tool, display: data.display, status: "running" },
+        { tool: data.tool, display: data.toolLabel ?? data.display ?? data.tool, status: "running" },
       ]);
     });
 
@@ -35,7 +35,7 @@ function App() {
         {
           id: crypto.randomUUID(),
           role: "agent",
-          content: data.content,
+          content: data.text ?? data.content ?? "",
           timestamp: new Date().toISOString(),
         },
       ]);
@@ -98,6 +98,7 @@ function App() {
 
         const { sessionId: id } = await res.json();
         setSessionId(id);
+        setPhase("chat");
         connectSSE(id);
       } catch (err) {
         setPhase("wizard");

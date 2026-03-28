@@ -182,40 +182,36 @@ app.get("/:id/stream", (c) => {
 
   return streamSSE(c, async (stream) => {
     let eventId = 0;
-    let doneReceived = false;
 
     // Send session history as initial context
-    await stream.writeSSE({
-      event: "history",
-      data: JSON.stringify(session.messages),
-      id: String(eventId++),
-    });
+    for (const msg of session.messages) {
+      await stream.writeSSE({
+        event: "history",
+        data: JSON.stringify(msg),
+        id: String(eventId++),
+      });
+    }
 
-    // Poll for new events
-    while (!doneReceived) {
+    // Keep polling for events — stream stays open for the entire session
+    // (the client uses one long-lived SSE connection for all turns)
+    while (true) {
       const events = drainEvents(id);
 
       for (const event of events) {
-        await stream.writeSSE({
-          event: event.type,
-          data: JSON.stringify(event),
-          id: String(eventId++),
-        });
-
-        if (event.type === "done" || event.type === "error") {
-          doneReceived = true;
+        try {
+          await stream.writeSSE({
+            event: event.type,
+            data: JSON.stringify(event),
+            id: String(eventId++),
+          });
+        } catch {
+          // Client disconnected
+          return;
         }
       }
 
-      if (!doneReceived) {
-        // Keep-alive ping every 15s, poll every 500ms
-        await stream.writeSSE({
-          event: "ping",
-          data: "",
-          id: String(eventId++),
-        });
-        await stream.sleep(500);
-      }
+      // Poll interval — 500ms between checks
+      await stream.sleep(500);
     }
   });
 });
