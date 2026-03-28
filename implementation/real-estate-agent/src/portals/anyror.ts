@@ -4,7 +4,7 @@
 // VERIFIED PATTERNS:
 // 1. Pages are flaky — "Application Error" on some URLs
 // 2. Try "VIEW LAND RECORD - URBAN" link for Surat and similar cities
-// 3. If portal returns error, return portal_unavailable flag for fallback to Claude Browser MCP
+// 3. If portal returns error, return portal_unavailable flag for fallback to Chrome DevTools MCP (mcp__chrome-devtools__*)
 // 4. Uses page.evaluate() for ALL form interactions (fill, click) to bypass overlays
 // 5. dev-browser needs --timeout 120 for this portal
 
@@ -204,7 +204,7 @@ if (initialText.includes('Application Error') || initialText.includes('Service U
           surveyNo,
           portal_unavailable: true,
           message:
-            "AnyRoR portal is unavailable. Use Claude Browser MCP to access land records manually.",
+            "AnyRoR portal is unavailable. Use Chrome DevTools MCP (mcp__chrome-devtools__*) to access land records manually.",
           rawText: ((parsed.pageText as string) || "").substring(0, 2000),
         },
         (parsed.screenshots as string[]) || []
@@ -391,7 +391,7 @@ if (initialText.includes('Application Error') || initialText.includes('Service U
           district,
           portal_unavailable: true,
           message:
-            "AnyRoR portal is unavailable. Use Claude Browser MCP to access land records manually.",
+            "AnyRoR portal is unavailable. Use Chrome DevTools MCP (mcp__chrome-devtools__*) to access land records manually.",
           rawText: ((parsed.pageText as string) || "").substring(0, 2000),
         },
         (parsed.screenshots as string[]) || []
