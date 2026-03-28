@@ -14,9 +14,8 @@ function App() {
   const connectSSE = useCallback((id: string) => {
     const es = new EventSource(`/api/sessions/${id}/stream`);
 
-    es.addEventListener("session_id", (e) => {
-      const data = JSON.parse(e.data);
-      setSessionId(data.sessionId ?? data.session_id);
+    es.addEventListener("session_id", () => {
+      // SDK session ID is stored server-side — we keep using the API session ID
     });
 
     es.addEventListener("tool_call", (e) => {
