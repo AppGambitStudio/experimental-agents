@@ -27,7 +27,7 @@ app.get("/api/health", (c) => {
 });
 
 // Start server
-const port = Number(process.env.PORT) || 3001;
+const port = Number(process.env.PORT) || 4100;
 serve({ fetch: app.fetch, port }, () => {
   console.log(`Real Estate Agent API server running on http://localhost:${port}`);
 });
