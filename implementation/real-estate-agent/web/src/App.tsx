@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type { AppPhase, WizardData, ChatMessage, ToolCallEvent } from "./types";
 import Wizard from "./components/Wizard";
 import SessionHeader from "./components/SessionHeader";
@@ -10,16 +10,44 @@ function App() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [activeTools, setActiveTools] = useState<ToolCallEvent[]>([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const eventSourceRef = useRef<EventSource | null>(null);
+
+  // Restore session from localStorage on mount
+  useEffect(() => {
+    const savedId = localStorage.getItem("re_sessionId");
+    const savedData = localStorage.getItem("re_wizardData");
+    if (savedId && savedData) {
+      try {
+        const data = JSON.parse(savedData) as WizardData;
+        setSessionId(savedId);
+        setWizardData(data);
+        setPhase("chat");
+        connectSSE(savedId);
+      } catch {
+        localStorage.removeItem("re_sessionId");
+        localStorage.removeItem("re_wizardData");
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const connectSSE = useCallback((id: string) => {
+    // Close existing connection if any
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
+
     const es = new EventSource(`/api/sessions/${id}/stream`);
+    eventSourceRef.current = es;
 
     es.addEventListener("session_id", () => {
-      // SDK session ID is stored server-side — we keep using the API session ID
+      // SDK session ID is stored server-side
     });
 
     es.addEventListener("tool_call", (e) => {
       const data = JSON.parse(e.data);
+      setIsProcessing(true);
       setActiveTools((prev) => [
         ...prev,
         { tool: data.tool, display: data.toolLabel ?? data.display ?? data.tool, status: "running" },
@@ -29,6 +57,7 @@ function App() {
     es.addEventListener("text", (e) => {
       const data = JSON.parse(e.data);
       setActiveTools([]);
+      setIsProcessing(false);
       setMessages((prev) => [
         ...prev,
         {
@@ -56,6 +85,7 @@ function App() {
 
     es.addEventListener("done", () => {
       setActiveTools([]);
+      setIsProcessing(false);
     });
 
     es.addEventListener("error", (e) => {
@@ -66,16 +96,17 @@ function App() {
           {
             id: crypto.randomUUID(),
             role: "system",
-            content: `Error: ${data.message ?? "Unknown error"}`,
+            content: `Error: ${data.message ?? data.error ?? "Unknown error"}`,
             timestamp: new Date().toISOString(),
           },
         ]);
       }
       setActiveTools([]);
+      setIsProcessing(false);
     });
 
     es.addEventListener("ping", () => {
-      // keep-alive, nothing to do
+      // keep-alive
     });
 
     return es;
@@ -98,6 +129,12 @@ function App() {
         const { sessionId: id } = await res.json();
         setSessionId(id);
         setPhase("chat");
+        setIsProcessing(true);
+
+        // Persist to localStorage
+        localStorage.setItem("re_sessionId", id);
+        localStorage.setItem("re_wizardData", JSON.stringify(data));
+
         connectSSE(id);
       } catch (err) {
         setPhase("wizard");
@@ -128,6 +165,7 @@ function App() {
           timestamp: new Date().toISOString(),
         },
       ]);
+      setIsProcessing(true);
 
       try {
         const res = await fetch(`/api/sessions/${sessionId}/message`, {
@@ -138,6 +176,7 @@ function App() {
 
         if (!res.ok) throw new Error("Failed to send message");
       } catch (err) {
+        setIsProcessing(false);
         setMessages((prev) => [
           ...prev,
           {
@@ -152,17 +191,41 @@ function App() {
     [sessionId],
   );
 
+  const handleNewSession = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
+    localStorage.removeItem("re_sessionId");
+    localStorage.removeItem("re_wizardData");
+    setPhase("wizard");
+    setWizardData(null);
+    setSessionId(null);
+    setMessages([]);
+    setActiveTools([]);
+    setIsProcessing(false);
+  }, []);
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-white border-b border-gray-200 px-4 py-3">
-        <div className="max-w-3xl mx-auto">
-          <h1 className="text-lg font-semibold text-gray-900">
-            Property Verification Copilot
-          </h1>
-          <p className="text-sm text-gray-500">
-            Gujarat Real Estate Due Diligence
-          </p>
+        <div className="max-w-3xl mx-auto flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-semibold text-gray-900">
+              Property Verification Copilot
+            </h1>
+            <p className="text-sm text-gray-500">
+              Gujarat Real Estate Due Diligence
+            </p>
+          </div>
+          {phase === "chat" && (
+            <button
+              onClick={handleNewSession}
+              className="text-xs text-gray-400 hover:text-gray-600 px-3 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+            >
+              New Session
+            </button>
+          )}
         </div>
       </header>
 
@@ -188,6 +251,7 @@ function App() {
             <Chat
               messages={messages}
               activeTools={activeTools}
+              isProcessing={isProcessing}
               onSendMessage={handleSendMessage}
             />
           </>
