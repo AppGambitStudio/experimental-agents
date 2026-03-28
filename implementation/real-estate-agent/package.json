@@ -7,6 +7,9 @@
     "start": "tsx src/index.ts",
     "analyze": "tsx src/cli.ts",
     "copilot": "tsx src/copilot-cli.ts",
+    "dev": "concurrently --names server,web --prefix-colors blue,green \"npm run dev:server\" \"npm run dev:web\"",
+    "dev:server": "tsx --watch server/index.ts",
+    "dev:web": "cd web && npm run dev",
     "test": "node --import tsx --test src/tests/*.test.ts",
     "test-tools": "tsx src/test-tools.ts",
     "typecheck": "tsc --noEmit --project tsconfig.json",
@@ -15,8 +18,11 @@
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.85",
+    "@hono/node-server": "^1.19.11",
     "@types/node": "^25.5.0",
+    "concurrently": "^9.2.1",
     "dotenv": "^17.3.1",
+    "hono": "^4.12.9",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
     "zod": "^4.3.6"
