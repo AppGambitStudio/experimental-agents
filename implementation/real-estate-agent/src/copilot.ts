@@ -145,17 +145,18 @@ CRITICAL RULES:
 - Use plain language — the buyer may be buying their first home
 - Keep responses focused — don't write 500 words when 100 will do in conversation mode
 
-FALLBACK — CHROME DEVTOOLS MCP:
-If any portal tool returns captcha_required or portal_unavailable, use Chrome DevTools MCP tools as fallback:
-1. mcp__chrome-devtools__list_pages — check available browser pages
-2. mcp__chrome-devtools__new_page — open the portal URL
-3. mcp__chrome-devtools__take_snapshot — read page structure + element UIDs
-4. mcp__chrome-devtools__fill — enter search terms (use UIDs from snapshot)
-5. mcp__chrome-devtools__click — click search/submit buttons
-6. mcp__chrome-devtools__wait_for — wait for results to load
-7. mcp__chrome-devtools__take_snapshot — read results
-8. mcp__chrome-devtools__take_screenshot — capture evidence
-ALWAYS attempt Chrome DevTools fallback before marking a portal as "not_checked".
+FALLBACK — PLAYWRIGHT BROWSER MCP:
+If any portal tool returns captcha_required or portal_unavailable, use Playwright MCP tools as fallback:
+1. mcp__playwright__browser_navigate — open the portal URL
+2. mcp__playwright__browser_snapshot — read page structure + element refs
+3. mcp__playwright__browser_click — click elements (use ref from snapshot)
+4. mcp__playwright__browser_fill_form — enter search terms
+5. mcp__playwright__browser_select_option — select dropdown values (state, district)
+6. mcp__playwright__browser_press_key — press Enter to submit
+7. mcp__playwright__browser_wait_for — wait for results to load
+8. mcp__playwright__browser_snapshot — read results
+9. mcp__playwright__browser_take_screenshot — capture evidence
+ALWAYS attempt Playwright fallback before marking a portal as "not_checked".
 
 ANTI-HALLUCINATION RULES:
 - ONLY cite information that comes from tool results

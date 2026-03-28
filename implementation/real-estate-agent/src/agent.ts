@@ -71,25 +71,26 @@ YOUR ANALYSIS PROCESS:
    d. Get required documents via get_required_documents for the property type
 10. Generate the comprehensive due diligence dossier
 
-FALLBACK INSTRUCTIONS — CHROME DEVTOOLS MCP:
+FALLBACK INSTRUCTIONS — PLAYWRIGHT BROWSER MCP:
 If any portal tool returns captcha_required or portal_unavailable, DO NOT give up.
-Instead, use Chrome DevTools MCP (mcp__chrome-devtools__*) tools as fallback to interact with the user's actual Chrome browser:
+Instead, use Playwright MCP (mcp__playwright__*) tools as fallback — this launches a headless browser:
 
-1. First call mcp__chrome-devtools__list_pages to see available browser pages
-2. Open the portal URL:
-   a. Use mcp__chrome-devtools__new_page to open the portal URL
-   b. Use mcp__chrome-devtools__take_snapshot to read the page structure and element UIDs
-   c. Use mcp__chrome-devtools__fill to enter search terms into form fields (use element UIDs from snapshot)
-   d. Use mcp__chrome-devtools__click to click search buttons and submit forms
-   e. Use mcp__chrome-devtools__wait_for to wait for results to load
-   f. Use mcp__chrome-devtools__take_snapshot again to read the results
-   g. Use mcp__chrome-devtools__take_screenshot for evidence
-3. If Chrome DevTools MCP is not available or fails:
+1. Navigate to the portal:
+   a. Use mcp__playwright__browser_navigate with the portal URL
+   b. Use mcp__playwright__browser_snapshot to read the page structure and element refs
+   c. Use mcp__playwright__browser_click to click on elements (use ref from snapshot)
+   d. Use mcp__playwright__browser_fill_form to enter search terms
+   e. Use mcp__playwright__browser_select_option for dropdowns (state, district selectors)
+   f. Use mcp__playwright__browser_press_key to press Enter/Tab
+   g. Use mcp__playwright__browser_wait_for to wait for results to load
+   h. Use mcp__playwright__browser_snapshot again to read the results
+   i. Use mcp__playwright__browser_take_screenshot for evidence
+2. If Playwright MCP is not available or fails:
    - Note the limitation clearly in your report
    - Inform the user which portals could not be checked and why
    - Continue with other portal checks
 
-IMPORTANT: ALWAYS attempt the Chrome DevTools fallback before marking a portal as "not_checked". Continue with other portal checks regardless — do NOT stop the entire analysis because one portal is unavailable.
+IMPORTANT: ALWAYS attempt the Playwright fallback before marking a portal as "not_checked". Continue with other portal checks regardless — do NOT stop the entire analysis because one portal is unavailable.
 
 YOUR DUE DILIGENCE REPORT SHOULD INCLUDE:
 1. Property Overview — address, type, builder, RERA ID

@@ -192,7 +192,7 @@ const searchEcourtsTool = tool(
   "search_ecourts",
   "Search eCourts (services.ecourts.gov.in) for court cases by party name. " +
     "Use this to check if the seller, builder, or promoter has any pending litigation. " +
-    "If the result includes captcha_required: true, inform the user and suggest Chrome DevTools MCP fallback (mcp__chrome-devtools__*).",
+    "If the result includes captcha_required: true, inform the user and suggest Playwright MCP fallback (mcp__playwright__browser_navigate, browser_snapshot, browser_click, browser_fill_form).",
   {
     party_name: z.string().describe("Name of the party to search for (seller, builder, or promoter name)"),
     state: z.string().describe("State name (e.g. 'Gujarat')"),
@@ -218,7 +218,7 @@ const searchEcourtsTool = tool(
             type: "text" as const,
             text: JSON.stringify({
               ...result,
-              _note: "CAPTCHA detected on eCourts portal. Automated search could not complete. Use Chrome DevTools MCP (mcp__chrome-devtools__*) tools as fallback — call list_pages, then new_page with the portal URL, then take_snapshot to read the page.",
+              _note: "CAPTCHA detected on eCourts portal. Automated search could not complete. Use Playwright MCP as fallback: call mcp__playwright__browser_navigate with the portal URL, then mcp__playwright__browser_snapshot to read the page, then mcp__playwright__browser_fill_form and mcp__playwright__browser_click to interact.",
             }),
           }],
         };

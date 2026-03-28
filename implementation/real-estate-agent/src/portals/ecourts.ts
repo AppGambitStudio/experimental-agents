@@ -4,7 +4,7 @@
 // VERIFIED PATTERNS:
 // 1. eCourts uses CAPTCHA on search forms — script detects and returns captcha_required flag
 // 2. Search by party name requires state + district selection from dropdowns
-// 3. If CAPTCHA is detected, the agent should fall back to Chrome DevTools MCP (mcp__chrome-devtools__*)
+// 3. If CAPTCHA is detected, the agent should fall back to Playwright MCP (mcp__playwright__browser_navigate, browser_snapshot, browser_fill_form)
 // 4. Uses page.evaluate() for ALL interactions to bypass overlay issues
 // 5. dev-browser needs --timeout 120 for this portal
 
@@ -158,7 +158,7 @@ console.log("__RESULT_START__" + JSON.stringify({
           district,
           captcha_required: true,
           message:
-            "CAPTCHA detected on eCourts. Use Chrome DevTools MCP (mcp__chrome-devtools__*) to complete the search manually.",
+            "CAPTCHA detected on eCourts. Use Playwright MCP (mcp__playwright__browser_navigate, browser_snapshot, browser_fill_form) to complete the search manually.",
           rawText: pageText.substring(0, 3000),
         },
         (parsed.screenshots as string[]) || []
