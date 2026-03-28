@@ -18,6 +18,7 @@ Research documents, specifications, and reference implementations for building p
 | [Agent Framework Implementation Playbook](reference/agent-framework-implementation-playbook.md) | Technical guide for implementing agents across 5 frameworks — Claude Agent SDK, LangChain/LangGraph, CrewAI, Mastra, and AWS Bedrock AgentCore. Includes framework selection matrix, reference implementations, hosting patterns (Docker/ECS/Fargate/Serverless), and migration guides. |
 | [Agentic Design Patterns Reference](reference/agentic-design-patterns-reference.md) | Distilled patterns from Google's 482-page guide — prompt chaining, routing, parallelization, reflection, tool use, planning, multi-agent, memory, guardrails, reasoning. With priority implementation table. |
 | [Common Agent Failure Modes](reference/common-agent-failure-modes.md) | 10 failure modes with symptoms, root causes, and mitigations — recursive loops, tool over-reliance, cascade failure, hallucinated results, context saturation, prompt injection, over-confident risk, state without rollback, blind retry, information hoarding. |
+| [Claude Agent SDK Patterns](reference/claude-agent-sdk-patterns.md) | Subagents (parallel execution, context isolation, tool restrictions), Slash Commands (built-in + custom with arguments/bash execution), and Agent Skills (autonomous invocation, SKILL.md format). With application examples for our real estate agent. |
 
 ## Agent Specs
 
