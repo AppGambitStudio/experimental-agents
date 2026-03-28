@@ -46,14 +46,7 @@ npm run copilot -- \
   --state Gujarat
 ```
 
-**Copilot commands during session:**
-
-| Command | What it does |
-|---------|-------------|
-| `summary` | Concise findings summary with risk assessment |
-| `red-flags` | Show all red flags detected |
-| `documents` | Show document checklist for your property type |
-| `quit` | End session (shows session ID for resumption) |
+**Copilot commands during session:** Type `/help` for the full list, or use any of the 11 slash commands (`/summary`, `/risks`, `/cost`, `/dossier`, `/verify <portal>`, etc.). Legacy commands (`summary`, `red-flags`, `documents`) still work.
 
 ## Setup
 
@@ -109,15 +102,15 @@ npm run typecheck
 
 ```
 src/
-├── agent.ts                      # Orchestrator — Phase 1 Due Diligence
-├── copilot.ts                    # Interactive copilot with sessions
+├── agent.ts                      # Orchestrator + subagent definitions
+├── copilot.ts                    # Interactive copilot with slash commands
 ├── dossier.ts                    # Dossier generation + cross-portal verification
 ├── cli.ts + copilot-cli.ts       # CLI entry points
 ├── index.ts                      # Library exports
 ├── mcp-servers/
-│   ├── browser-mcp.ts            # 10 tools wrapping 6 portal modules
-│   ├── property-kb-mcp.ts        # Gujarat knowledge base (4 tools)
-│   └── tracker-mcp.ts            # Purchase tracking + verification log (5 tools)
+│   ├── browser-mcp.ts            # 7 tools wrapping 6 portal modules
+│   ├── property-kb-mcp.ts        # Gujarat knowledge base (10 tools incl. critic)
+│   └── tracker-mcp.ts            # Purchase tracking + verification log (7 tools)
 ├── portals/
 │   ├── base-portal.ts            # dev-browser helpers (sandboxed execution)
 │   ├── gujrera.ts                # Gujarat RERA portal ✅ (working)
@@ -129,18 +122,66 @@ src/
 ├── knowledge-base/
 │   ├── jantri-rates.ts           # 7 Surat zones with rates
 │   ├── stamp-duty.ts             # Gujarat rates + calculator
+│   ├── total-cost.ts             # Full ownership cost with hidden charges
+│   ├── registration-guide.ts     # 10-step registration process
+│   ├── post-purchase.ts          # 12 post-purchase tasks
+│   ├── negative-constraints.ts   # 14 verification blind spots
+│   ├── critic.ts                 # Reflection/critic agent (report review)
 │   ├── red-flags.ts              # 20 patterns across 5 categories
 │   └── required-documents.ts     # Checklists for 4 property types
+├── tests/                        # 139 tests (all passing)
 └── types/index.ts
+.claude/skills/
+├── gujarat-property-law/         # RERA, NA conversion, title rules
+├── stamp-duty-calculator/        # Total cost with hidden charges
+├── verification-limitations/     # MANDATORY safety disclaimer
+├── registration-guide/           # Registration walkthrough
+└── post-purchase-checklist/      # Post-registration formalities
 ```
 
-### MCP Servers (3 servers, 19 tools)
+### MCP Servers (3 servers, 24 tools)
 
 | Server | Tools | Purpose |
 |--------|-------|---------|
-| `browser-mcp` | `search_rera_project`, `get_rera_project_details`, `take_portal_screenshot`, `search_ecourts`, `search_anyror_land_record`, `search_anyror_by_owner`, `search_garvi_document`, `lookup_garvi_jantri`, `check_smc_property_tax`, `verify_gstin` | Government portal automation via dev-browser |
-| `property-kb-mcp` | `get_jantri_rate`, `calculate_stamp_duty`, `check_red_flags`, `get_required_documents` | Gujarat property knowledge base |
-| `tracker-mcp` | `create_purchase`, `log_verification`, `get_verification_log`, `update_phase`, `get_purchase_summary` | Purchase tracking + verification audit trail |
+| `browser-mcp` | 7 tools — `search_rera_project`, `get_rera_project_details`, `take_portal_screenshot`, `search_ecourts`, `search_anyror_land_record`, `search_anyror_by_owner`, `search_garvi_document`, `lookup_garvi_jantri`, `check_smc_property_tax`, `verify_gstin` | Government portal automation via dev-browser |
+| `property-kb-mcp` | 10 tools — `get_jantri_rate`, `calculate_stamp_duty`, `check_red_flags`, `get_required_documents`, `calculate_total_cost`, `get_registration_guide`, `get_post_purchase_checklist`, `get_verification_limitations`, `review_report` | Gujarat knowledge base + critic review |
+| `tracker-mcp` | 7 tools — `create_purchase`, `log_verification`, `get_verification_log`, `update_phase`, `get_purchase_summary`, `track_checklist_item` | Purchase tracking + verification audit trail + post-purchase progress |
+
+### Slash Commands (Interactive Copilot)
+
+| Command | Description |
+|---------|-------------|
+| `/summary` | Findings summary with risk rating (runs critic review) |
+| `/risks` | All critical and high-severity risks |
+| `/cost` | Total ownership cost calculator |
+| `/dossier` | Final due diligence report for your lawyer |
+| `/documents` | Property document checklist |
+| `/verify <portal>` | Deep-dive into specific portal findings |
+| `/compare-jantri` | Agreed price vs government rate |
+| `/timeline` | Registration steps with timing |
+| `/postpurchase` | Post-registration checklist |
+| `/next-steps` | Top 5 prioritized action items |
+| `/check-builder <name>` | Builder's RERA track record |
+
+### Subagents (Parallel Verification)
+
+| Agent | Model | Purpose |
+|-------|-------|---------|
+| `litigation-checker` | Sonnet | eCourts litigation search |
+| `land-record-checker` | Sonnet | AnyRoR ownership + encumbrance |
+| `document-checker` | Sonnet | GARVI documents + jantri rates |
+| `tax-gstn-checker` | Sonnet | SMC tax + GST verification |
+| `critic-reviewer` | Opus | Report quality review (reflection pattern) |
+
+### Agent Skills (Auto-Invoked)
+
+| Skill | Trigger |
+|-------|---------|
+| `gujarat-property-law` | Questions about RERA, NA conversion, title chain, legality |
+| `stamp-duty-calculator` | Price discussions, "how much will I pay", cost questions |
+| `verification-limitations` | Before any "Clear" or "Low Risk" assessment (mandatory) |
+| `registration-guide` | "Ready to register", registration process questions |
+| `post-purchase-checklist` | After registration, "what's next" questions |
 
 ### Two-Tier Browser Automation
 
@@ -161,8 +202,12 @@ src/
 |------|-------|--------|
 | Jantri rates | 7 Surat zones (residential + commercial) | Gujarat Town Planning Dept |
 | Stamp duty | Gujarat rates (3.5% residential, 4.9% commercial) | Gujarat Stamp Act |
+| Total cost components | 13 line items (stamp duty → broker commission) | Industry practice |
 | Red flag patterns | 20 across 5 categories (RERA, land, legal, financial, builder) | Legal expertise |
-| Document checklists | 4 property types (10-13 docs each) | Property law best practices |
+| Document checklists | 5 property types (14-20 docs each) | Property law best practices |
+| Registration steps | 10 steps (agreement → deed collection) | Gujarat Sub-Registrar process |
+| Post-purchase tasks | 12 tasks across 5 categories | Gujarat municipal/legal requirements |
+| Negative constraints | 14 documented blind spots | Verification scope analysis |
 
 ## Output Structure
 
@@ -252,7 +297,9 @@ This implementation follows the [Real Estate Transaction Agent spec](../../real-
 |------|--------|----------------|
 | Part 1 | ✅ Complete | Project scaffold, RERA portal automation, Gujarat KB, tracker, copilot |
 | Part 2 | ✅ Complete | 5 remaining portals (eCourts, AnyRoR, GARVI, SMC, GSTN), dossier system, cross-portal verification |
-| Part 3 | Planned | Document analysis, builder agreement review, Phases 2-5, total cost calculator |
+| Part 3 | ✅ Complete | Total cost calculator, registration guide, post-purchase checklist, negative constraints |
+| Part 4 | ✅ Complete | Reflection/critic agent, slash commands, subagent definitions, agent skills |
+| Part 5 | Planned | Document analysis (PDF parsing), builder agreement review, parallel portal execution |
 
 ## Limitations (Current)
 
