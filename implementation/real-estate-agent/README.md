@@ -17,11 +17,30 @@ Give it a RERA project ID and the agent:
 9. **Produces verification log** — timestamped, append-only audit trail of every check performed
 10. **Creates dossier summary** — cross-portal verification matrix with overall risk assessment
 
-## Two Modes
+## Three Modes
+
+### Web UI (`npm run dev`) — Recommended
+
+Browser-based interface for non-technical users. 3-step guided wizard collects property details, then opens an interactive chat with the copilot. Responses stream in real-time.
+
+```bash
+# Install frontend dependencies (one-time)
+cd web && npm install && cd ..
+
+# Start both API server (:4100) and frontend (:5173)
+npm run dev
+
+# Open in browser
+open http://localhost:5173
+```
+
+The wizard asks for address, property type, budget, and optionally RERA ID and builder name. After submitting, the chat interface shows portal verification progress and agent responses as they stream. Quick-action buttons provide shortcuts to `/summary`, `/risks`, `/cost`, `/dossier`.
+
+**Requirements:** Chrome must be open for Chrome DevTools MCP fallback (CAPTCHA-blocked portals).
 
 ### One-Shot Analysis (`npm run analyze`)
 
-Full due diligence report in one pass.
+Full due diligence report in one pass via CLI.
 
 ```bash
 npm run analyze -- \
@@ -35,7 +54,7 @@ npm run analyze -- \
 
 ### Interactive Copilot (`npm run copilot`)
 
-Conversational property verification — agent asks questions, shows findings progressively, responds to follow-ups.
+Terminal-based conversational property verification — same copilot as the web UI but in the terminal.
 
 ```bash
 npm run copilot -- \
@@ -65,8 +84,11 @@ cd implementation/real-estate-agent
 npm install -g dev-browser
 dev-browser install
 
-# Install project dependencies
+# Install backend + agent dependencies
 npm install
+
+# Install frontend dependencies
+cd web && npm install && cd ..
 ```
 
 ### Configure
@@ -101,36 +123,31 @@ npm run typecheck
 ## Architecture
 
 ```
-src/
-├── agent.ts                      # Orchestrator + subagent definitions
-├── copilot.ts                    # Interactive copilot with slash commands
-├── dossier.ts                    # Dossier generation + cross-portal verification
-├── cli.ts + copilot-cli.ts       # CLI entry points
-├── index.ts                      # Library exports
-├── mcp-servers/
-│   ├── browser-mcp.ts            # 7 tools wrapping 6 portal modules
-│   ├── property-kb-mcp.ts        # Gujarat knowledge base (10 tools incl. critic)
-│   └── tracker-mcp.ts            # Purchase tracking + verification log (7 tools)
-├── portals/
-│   ├── base-portal.ts            # dev-browser helpers (sandboxed execution)
-│   ├── gujrera.ts                # Gujarat RERA portal ✅ (working)
-│   ├── ecourts.ts                # eCourts dispute search (CAPTCHA fallback)
-│   ├── anyror.ts                 # AnyRoR land records (portal flaky)
-│   ├── garvi.ts                  # GARVI registration + jantri
-│   ├── smc-tax.ts                # Surat Municipal Corporation property tax
-│   └── gstn.ts                   # GSTN builder GST verification ✅ (working)
-├── knowledge-base/
-│   ├── jantri-rates.ts           # 7 Surat zones with rates
-│   ├── stamp-duty.ts             # Gujarat rates + calculator
-│   ├── total-cost.ts             # Full ownership cost with hidden charges
-│   ├── registration-guide.ts     # 10-step registration process
-│   ├── post-purchase.ts          # 12 post-purchase tasks
-│   ├── negative-constraints.ts   # 14 verification blind spots
-│   ├── critic.ts                 # Reflection/critic agent (report review)
-│   ├── red-flags.ts              # 20 patterns across 5 categories
-│   └── required-documents.ts     # Checklists for 4 property types
-├── tests/                        # 139 tests (all passing)
-└── types/index.ts
+├── server/                        # API server (Hono)
+│   ├── index.ts                   # Hono app, CORS, routes, listen on :4100
+│   ├── agent-bridge.ts            # Wraps SDK query() → EventEmitter for SSE
+│   ├── session-store.ts           # In-memory session state
+│   └── routes/sessions.ts         # REST + SSE endpoints, slash command resolution
+├── web/                           # Frontend (Vite + React + Tailwind)
+│   └── src/
+│       ├── App.tsx                # Wizard → Chat state machine + SSE handling
+│       └── components/
+│           ├── Wizard.tsx         # 3-step intake form
+│           ├── Chat.tsx           # Chat container + input + quick actions
+│           ├── MessageBubble.tsx  # Agent (markdown) / user / system messages
+│           ├── ToolProgress.tsx   # Portal check spinners
+│           ├── QuickActions.tsx   # /summary, /risks, /cost, /dossier buttons
+│           └── SessionHeader.tsx  # Property info bar
+├── src/                           # Agent core
+│   ├── agent.ts                   # Orchestrator + subagent definitions
+│   ├── copilot.ts                 # System prompt, slash commands
+│   ├── mcp-servers/
+│   │   ├── browser-mcp.ts        # 7 tools wrapping 6 portal modules
+│   │   ├── property-kb-mcp.ts    # Gujarat knowledge base (10 tools incl. critic)
+│   │   └── tracker-mcp.ts        # Purchase tracking + verification log (7 tools)
+│   ├── portals/                   # 6 portal automation modules
+│   ├── knowledge-base/            # 9 KB modules (jantri, stamp duty, cost, etc.)
+│   └── tests/                     # 139 tests (all passing)
 .claude/skills/
 ├── gujarat-property-law/         # RERA, NA conversion, title rules
 ├── stamp-duty-calculator/        # Total cost with hidden charges
