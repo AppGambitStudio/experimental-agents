@@ -122,7 +122,7 @@ export function runAgentTurn(options: RunTurnOptions): EventEmitter {
           model: "sonnet",
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
-          maxTurns: 15,
+          maxTurns: 50,
           ...(options.sdkSessionId ? { resume: options.sdkSessionId } : {}),
         },
       };

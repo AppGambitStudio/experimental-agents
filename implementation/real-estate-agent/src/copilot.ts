@@ -368,7 +368,7 @@ Remember: this is a conversation, not a report. Keep the first response concise 
         model: "sonnet",
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
-        maxTurns: 15,
+        maxTurns: 50,
         ...(sessionId ? { resume: sessionId } : {}),
       },
     };
