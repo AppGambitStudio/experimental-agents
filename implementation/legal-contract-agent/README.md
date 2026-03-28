@@ -42,14 +42,7 @@ npm run copilot -- \
   --state Gujarat
 ```
 
-**Copilot commands during session:**
-
-| Command | What it does |
-|---------|-------------|
-| `playbook` | Generate priority-ordered negotiation playbook |
-| `summary` | Concise summary of all findings so far |
-| `redline` | Suggested alternative language for flagged clauses |
-| `quit` | End session (prints session ID for resumption) |
+**Copilot commands during session:** Type `/help` for the full list, or use any of the 11 slash commands (`/summary`, `/risks`, `/playbook`, `/redline`, `/stamp-duty`, etc.). Legacy commands (`playbook`, `summary`, `redline`) still work.
 
 ## Setup
 
@@ -98,31 +91,73 @@ npm run typecheck
 
 ```
 src/
-├── agent.ts                    # One-shot analysis orchestrator
-├── copilot.ts                  # Interactive copilot with session persistence
+├── agent.ts                    # Orchestrator + subagent definitions
+├── copilot.ts                  # Interactive copilot with slash commands
 ├── cli.ts                      # CLI for one-shot mode
 ├── copilot-cli.ts              # CLI for copilot mode
 ├── index.ts                    # Library exports
 ├── mcp-servers/
 │   ├── document-mcp.ts         # PDF text extraction (pdf-parse v2)
-│   ├── legal-kb-mcp.ts         # Indian law knowledge base (clause patterns, stamp duty, enforceability)
+│   ├── legal-kb-mcp.ts         # Indian law knowledge base (7 tools incl. critic)
 │   └── contract-mcp.ts         # Contract repository (version tracking, analysis storage)
 ├── knowledge-base/
 │   ├── clause-patterns.ts      # 10 Indian law risk patterns
-│   └── stamp-duty.ts           # State-wise stamp duty rates
+│   ├── stamp-duty.ts           # State-wise stamp duty rates (4 states)
+│   ├── regulatory-compliance.ts # 7 Indian regulations (DPDPA, FEMA, Labor Codes, etc.)
+│   ├── negative-constraints.ts # 10 analysis limitations with disclaimer
+│   └── critic.ts               # Reflection/critic agent (report review)
+├── tests/                      # 36 tests (all passing)
 └── types/
     └── index.ts                # Shared TypeScript types
+.claude/skills/
+├── indian-contract-law/        # Section 27, 57, 73-74, DPDPA rules
+├── data-protection/            # DPDPA 2023 + IT Act compliance
+├── stamp-duty-calculator/      # Multi-state stamp duty
+├── negotiation-playbook/       # Playbook strategy and tactics
+└── analysis-limitations/       # MANDATORY safety disclaimer
 ```
 
-### MCP Servers
-
-The agent uses 3 in-process MCP servers built with `createSdkMcpServer()`:
+### MCP Servers (3 servers, 14 tools)
 
 | Server | Tools | Purpose |
 |--------|-------|---------|
-| `document-mcp` | `parse_document`, `extract_metadata` | PDF/text extraction via pdf-parse v2 |
-| `legal-kb-mcp` | `search_clause_patterns`, `get_required_clauses`, `get_stamp_duty`, `check_enforceability` | Indian law knowledge base |
-| `contract-mcp` | `create_contract`, `add_version`, `store_analysis`, `get_previous_analysis`, `get_contract_timeline` | Contract repository and version tracking |
+| `document-mcp` | 2 tools — `parse_document`, `extract_metadata` | PDF/text extraction via pdf-parse v2 |
+| `legal-kb-mcp` | 7 tools — `search_clause_patterns`, `get_required_clauses`, `get_stamp_duty`, `check_enforceability`, `get_applicable_regulations`, `get_contract_limitations`, `review_report` | Indian law knowledge base + regulatory compliance + critic review |
+| `contract-mcp` | 5 tools — `create_contract`, `add_version`, `store_analysis`, `get_previous_analysis`, `get_contract_timeline` | Contract repository and version tracking |
+
+### Slash Commands (Interactive Copilot)
+
+| Command | Description |
+|---------|-------------|
+| `/summary` | Concise findings with risk score (runs critic review) |
+| `/risks` | All critical and high-risk clauses with law references |
+| `/playbook` | Full negotiation playbook, priority-ordered |
+| `/redline` | Original vs suggested text, side by side |
+| `/stamp-duty` | Calculate stamp duty for this contract |
+| `/checklist` | Required clauses for this contract type |
+| `/enforceability <type>` | Check if a clause type is enforceable |
+| `/compare` | Compare with previous version |
+| `/dossier` | Final analysis report for legal team |
+| `/next-steps` | Top 5 prioritized actions |
+
+### Subagents (Parallel Analysis)
+
+| Agent | Model | Purpose |
+|-------|-------|---------|
+| `clause-analyzer` | Sonnet | Individual clause scanning against Indian law |
+| `risk-assessor` | Sonnet | Aggregate risk scoring and grading |
+| `negotiation-advisor` | Opus | Playbook generation with talking points |
+| `critic-reviewer` | Opus | Report quality review (reflection pattern) |
+
+### Agent Skills (Auto-Invoked)
+
+| Skill | Trigger |
+|-------|---------|
+| `indian-contract-law` | Questions about enforceability, Section 27, penalties, IP |
+| `data-protection` | Contract involves personal data, DPDPA compliance |
+| `stamp-duty-calculator` | Cost questions, stamping, registration |
+| `negotiation-playbook` | "How should I negotiate?", pushback strategy |
+| `analysis-limitations` | Before any final report (mandatory safety disclaimer) |
 
 ### Knowledge Base
 
@@ -130,12 +165,14 @@ The knowledge base drives the agent's Indian law intelligence. Currently hardcod
 
 **Current (Prototype) — Hardcoded in TypeScript:**
 
-| Data | Location | Count |
-|------|----------|-------|
-| Clause risk patterns | `src/knowledge-base/clause-patterns.ts` | 10 patterns |
-| Stamp duty rates | `src/knowledge-base/stamp-duty.ts` | 4 states |
-| Enforceability rules | `src/mcp-servers/legal-kb-mcp.ts` | 5 clause types |
-| Required clauses per type | `src/mcp-servers/legal-kb-mcp.ts` | 5 contract types |
+| Data | Count | Source |
+|------|-------|--------|
+| Clause risk patterns | 10 patterns across 7 categories | Indian Contract Act, Copyright Act, DPDPA |
+| Stamp duty rates | 4 states × 5 document types | State Stamp Acts |
+| Enforceability rules | 5 clause types | Indian case law + statutes |
+| Required clauses per type | 5 contract types (6-10 clauses each) | Legal best practices |
+| Regulatory requirements | 7 regulations (DPDPA, FEMA, Labor Codes, etc.) | Central Acts |
+| Analysis limitations | 10 documented blind spots | Verification scope analysis |
 
 **Clause patterns (10):**
 
@@ -275,6 +312,15 @@ Each analysis costs approximately ₹50-150 depending on contract length (10-50 
 ## Spec
 
 This implementation follows the [Legal/Contract Intelligence Agent spec](../../legal-contract-intelligence-agent-spec.md). The spec covers the full production architecture including PostgreSQL + pgvector knowledge base, version comparison, and multi-tenant support.
+
+## Implementation Status
+
+| Part | Status | What's Included |
+|------|--------|----------------|
+| Part 1 | ✅ Complete | Project scaffold, PDF parsing, clause pattern matching, stamp duty, copilot |
+| Part 2 | ✅ Complete | Regulatory compliance (DPDPA, FEMA, Labor Codes), negative constraints, critic agent |
+| Part 3 | ✅ Complete | Slash commands, subagent definitions, agent skills, proper test suite |
+| Part 4 | Planned | Version comparison (diff two contract versions), PostgreSQL + pgvector KB |
 
 ## Limitations (Prototype)
 
