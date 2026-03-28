@@ -156,13 +156,14 @@ npm run typecheck
 └── post-purchase-checklist/      # Post-registration formalities
 ```
 
-### MCP Servers (3 servers, 24 tools)
+### MCP Servers (4 servers — 3 in-process + 1 external)
 
-| Server | Tools | Purpose |
-|--------|-------|---------|
-| `browser-mcp` | 7 tools — `search_rera_project`, `get_rera_project_details`, `take_portal_screenshot`, `search_ecourts`, `search_anyror_land_record`, `search_anyror_by_owner`, `search_garvi_document`, `lookup_garvi_jantri`, `check_smc_property_tax`, `verify_gstin` | Government portal automation via dev-browser |
-| `property-kb-mcp` | 10 tools — `get_jantri_rate`, `calculate_stamp_duty`, `check_red_flags`, `get_required_documents`, `calculate_total_cost`, `get_registration_guide`, `get_post_purchase_checklist`, `get_verification_limitations`, `review_report` | Gujarat knowledge base + critic review |
-| `tracker-mcp` | 7 tools — `create_purchase`, `log_verification`, `get_verification_log`, `update_phase`, `get_purchase_summary`, `track_checklist_item` | Purchase tracking + verification audit trail + post-purchase progress |
+| Server | Type | Tools | Purpose |
+|--------|------|-------|---------|
+| `browser-mcp` | In-process | 7 tools — portal automation scripts | Government portal automation via dev-browser |
+| `property-kb-mcp` | In-process | 10 tools — knowledge base + critic | Gujarat KB: jantri, stamp duty, total cost, red flags, registration guide, post-purchase, limitations, critic review |
+| `tracker-mcp` | In-process | 7 tools — purchase tracking | Purchase state, verification log, phase transitions, checklist progress |
+| `playwright` | External (stdio) | 30+ tools — headless browser | Fallback browser automation via `@playwright/mcp`. Launches headless Chromium for CAPTCHA-blocked portals |
 
 ### Slash Commands (Interactive Copilot)
 
@@ -202,16 +203,47 @@ npm run typecheck
 
 ### Two-Tier Browser Automation
 
+The agent uses two browser automation layers. The primary layer (dev-browser) runs sandboxed portal automation scripts. When a portal blocks automation (CAPTCHA, errors), the fallback layer ([Playwright MCP](https://github.com/microsoft/playwright-mcp)) launches a headless Chromium browser to navigate the portal interactively.
+
 | Portal | Primary | Fallback | Status |
 |--------|---------|----------|--------|
-| Gujarat RERA | dev-browser | — | ✅ Working (modal dismissal, search via evaluate) |
-| GSTN | dev-browser | — | ✅ Working (simple input, no CAPTCHA) |
-| eCourts | dev-browser | Claude Browser MCP | ⚠️ CAPTCHA blocks full automation |
-| AnyRoR | dev-browser | Claude Browser MCP | ⚠️ Portal intermittently unavailable |
-| GARVI | dev-browser | Claude Browser MCP | Needs live testing |
-| SMC Property Tax | dev-browser | Claude Browser MCP | Needs live testing |
+| Gujarat RERA | dev-browser | Playwright MCP | ✅ Working (modal dismissal, search via evaluate) |
+| GSTN | dev-browser | Playwright MCP | ✅ Working (simple input, no CAPTCHA) |
+| eCourts | dev-browser | Playwright MCP | ⚠️ CAPTCHA — Playwright fallback navigates and fills forms |
+| AnyRoR | dev-browser | Playwright MCP | ⚠️ Portal intermittently unavailable |
+| GARVI | dev-browser | Playwright MCP | Needs live testing |
+| SMC Property Tax | dev-browser | Playwright MCP | Needs live testing |
 
-**How the fallback works:** When a portal tool returns `captcha_required: true` or `portal_unavailable: true`, the agent informs the user and suggests using interactive copilot mode where Claude Browser MCP can visually navigate the portal.
+**How the fallback works:** When a portal tool returns `captcha_required: true` or `portal_unavailable: true`, the agent automatically uses Playwright MCP tools to:
+1. `browser_navigate` — open the portal URL in headless Chromium
+2. `browser_snapshot` — read the page structure and element refs
+3. `browser_fill_form` / `browser_select_option` — enter search criteria
+4. `browser_click` / `browser_press_key` — submit forms
+5. `browser_wait_for` — wait for results to load
+6. `browser_snapshot` — extract results
+7. `browser_take_screenshot` — capture evidence
+
+Playwright MCP runs as an external stdio MCP server (`@playwright/mcp`) configured in the agent bridge. It launches its own Chromium instance — no Chrome installation or extension required.
+
+**MCP Server Configuration (server/agent-bridge.ts):**
+```typescript
+mcpServers: {
+  "browser-mcp": browserMcp,        // In-process: portal automation scripts
+  "property-kb-mcp": propertyKbMcp, // In-process: Gujarat knowledge base
+  "tracker-mcp": trackerMcp,        // In-process: purchase tracking
+  "playwright": {                    // External: headless browser fallback
+    type: "stdio",
+    command: "npx",
+    args: ["@playwright/mcp@latest"]
+  }
+},
+allowedTools: [                      // Required: explicitly permit MCP tools
+  "mcp__browser-mcp__*",
+  "mcp__property-kb-mcp__*",
+  "mcp__tracker-mcp__*",
+  "mcp__playwright__*"
+]
+```
 
 ### Knowledge Base
 
