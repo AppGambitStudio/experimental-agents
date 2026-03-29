@@ -61,10 +61,10 @@ Research documents, specifications, and reference implementations for building p
 
 Working code with MCP servers, tests, web UI, and interactive copilot.
 
-| Agent | Stack | Tools | Tests | Features |
-|-------|-------|-------|-------|----------|
-| [Real Estate Transaction Agent](implementation/real-estate-agent/) | TypeScript, Claude Agent SDK, Hono, Vite+React | 4 MCP servers (24 in-process tools + Playwright browser) | 139 | Web UI (wizard → chat), 11 slash commands, 5 subagents, 5 skills, reflection/critic agent, Playwright MCP fallback for CAPTCHA |
-| [Legal Contract Intelligence Agent](implementation/legal-contract-agent/) | TypeScript, Claude Agent SDK | 3 MCP servers (14 tools) | 36 | CLI copilot, 11 slash commands, 4 subagents, 5 skills, reflection/critic agent, multi-state stamp duty |
+| Agent | Stack | Tools | Features |
+|-------|-------|-------|----------|
+| [Real Estate Transaction Agent](implementation/real-estate-agent/) | TypeScript, Claude Agent SDK, Hono, Vite+React | 4 MCP servers (24 in-process tools + Playwright browser) | Web UI (wizard → chat), 11 slash commands, 5 subagents, 5 skills, reflection/critic agent, Playwright MCP fallback for CAPTCHA |
+| [Legal Contract Intelligence Agent](implementation/legal-contract-agent/) | TypeScript, Claude Agent SDK | 3 MCP servers (14 tools) | CLI copilot, 11 slash commands, 4 subagents, 5 skills, reflection/critic agent, multi-state stamp duty |
 
 ## Contributing
 
