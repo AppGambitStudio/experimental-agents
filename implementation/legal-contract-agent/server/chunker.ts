@@ -1,5 +1,9 @@
 // Document chunker — splits large contracts into logical clause-based chunks
 // for cost-efficient per-chunk analysis.
+//
+// Design: Only split at TOP-LEVEL clause boundaries (1., 2., 3.) not sub-sections.
+// Merge small adjacent clauses to hit target chunk size (~2000-2500 words).
+// Target: 5-15 chunks max for a 60-100 page contract.
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -34,21 +38,24 @@ export interface ChunkResult {
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const WORDS_PER_PAGE = 450;
-const MAX_CHUNK_WORDS = WORDS_PER_PAGE * 5; // 2250 words ≈ 5 pages
+const TARGET_CHUNK_WORDS = WORDS_PER_PAGE * 4; // ~1800 words = ~4 pages
+const MAX_CHUNK_WORDS = WORDS_PER_PAGE * 6; // ~2700 words = ~6 pages (hard limit for sub-split)
+const MAX_CHUNKS = 15; // never produce more than 15 chunks
 
 // ── Heading patterns ───────────────────────────────────────────────────────
 
-const NUMBERED_HEADING = /^(\d+\.?\d*\.?\d*)\s+[A-Z]/;
+// Only match TOP-LEVEL headings: "1.", "2.", "3." — NOT "3.2", "3.2.1"
+const TOP_LEVEL_NUMBERED = /^(\d+)\.\s+[A-Z]/;
 const NAMED_HEADING = /^(SCHEDULE|ANNEXURE|EXHIBIT|APPENDIX)\s+[A-Z]/i;
 const ALLCAPS_HEADING = /^[A-Z][A-Z\s]{5,}$/;
 
-function isHeading(line: string): RegExpMatchArray | null {
+function isTopLevelHeading(line: string): boolean {
   const trimmed = line.trim();
-  if (!trimmed) return null;
+  if (!trimmed || trimmed.length > 80) return false;
   return (
-    trimmed.match(NUMBERED_HEADING) ??
-    trimmed.match(NAMED_HEADING) ??
-    trimmed.match(ALLCAPS_HEADING)
+    TOP_LEVEL_NUMBERED.test(trimmed) ||
+    NAMED_HEADING.test(trimmed) ||
+    ALLCAPS_HEADING.test(trimmed)
   );
 }
 
@@ -73,11 +80,11 @@ function estimatePageForPosition(
 function extractHeadingTitle(line: string): { number: string; title: string } {
   const trimmed = line.trim();
 
-  const numbered = trimmed.match(NUMBERED_HEADING);
+  const numbered = trimmed.match(TOP_LEVEL_NUMBERED);
   if (numbered) {
     return {
       number: numbered[1],
-      title: trimmed.slice(numbered[1].length).trim(),
+      title: trimmed.slice(numbered[1].length + 1).trim(),
     };
   }
 
@@ -86,7 +93,6 @@ function extractHeadingTitle(line: string): { number: string; title: string } {
     return { number: "", title: trimmed };
   }
 
-  // all-caps heading
   return { number: "", title: trimmed };
 }
 
@@ -101,15 +107,13 @@ export function extractClauses(
 
   let charOffset = 0;
   for (let i = 0; i < lines.length; i++) {
-    const match = isHeading(lines[i]);
-    if (match) {
+    if (isTopLevelHeading(lines[i])) {
       const { number, title } = extractHeadingTitle(lines[i]);
       headingIndices.push({ lineIndex: i, charOffset, number, title });
     }
-    charOffset += lines[i].length + 1; // +1 for newline
+    charOffset += lines[i].length + 1;
   }
 
-  // No headings found — return entire document as single clause
   if (headingIndices.length === 0) {
     const wc = countWords(fullText);
     return [
@@ -197,44 +201,45 @@ export function chunkDocument(
   });
   const definitionsText = defClause?.text ?? "";
 
-  // Build chunks, sub-splitting large clauses
-  const chunks: DocumentChunk[] = [];
+  // Merge small adjacent clauses into target-sized chunks
+  const mergedChunks = mergeClauses(clauses);
+
+  // Sub-split any chunk that's still too large
+  const finalChunks: DocumentChunk[] = [];
   let chunkIndex = 1;
 
-  for (const clause of clauses) {
-    if (clause.wordCount <= MAX_CHUNK_WORDS) {
-      chunks.push({
+  for (const merged of mergedChunks) {
+    if (merged.wordCount <= MAX_CHUNK_WORDS) {
+      finalChunks.push({
         id: `chunk-${chunkIndex++}`,
-        clauseNumber: clause.number,
-        clauseTitle: clause.title,
-        text: clause.text,
-        pageStart: clause.pageStart,
-        pageEnd: clause.pageEnd,
-        wordCount: clause.wordCount,
+        clauseNumber: merged.clauseNumber,
+        clauseTitle: merged.clauseTitle,
+        text: merged.text,
+        pageStart: merged.pageStart,
+        pageEnd: merged.pageEnd,
+        wordCount: merged.wordCount,
       });
     } else {
-      // Sub-split large clause by word count
-      const words = clause.text.split(/\s+/);
-      let subPartIndex = 1;
-      for (let start = 0; start < words.length; start += MAX_CHUNK_WORDS) {
-        const slice = words.slice(start, start + MAX_CHUNK_WORDS);
+      // Sub-split by word count
+      const words = merged.text.split(/\s+/);
+      let subPart = 1;
+      for (let start = 0; start < words.length; start += TARGET_CHUNK_WORDS) {
+        const slice = words.slice(start, start + TARGET_CHUNK_WORDS);
         const subText = slice.join(" ");
-        const subWordCount = slice.length;
-
         const ratio = start / words.length;
-        const endRatio = Math.min(1, (start + MAX_CHUNK_WORDS) / words.length);
-        const pageSpan = clause.pageEnd - clause.pageStart;
+        const endRatio = Math.min(1, (start + TARGET_CHUNK_WORDS) / words.length);
+        const pageSpan = merged.pageEnd - merged.pageStart;
 
-        chunks.push({
+        finalChunks.push({
           id: `chunk-${chunkIndex++}`,
-          clauseNumber: `${clause.number}.${subPartIndex}`,
-          clauseTitle: `${clause.title} (Part ${subPartIndex})`,
+          clauseNumber: merged.clauseNumber,
+          clauseTitle: `${merged.clauseTitle} (Part ${subPart})`,
           text: subText,
-          pageStart: Math.max(1, Math.round(clause.pageStart + ratio * pageSpan)),
-          pageEnd: Math.max(1, Math.round(clause.pageStart + endRatio * pageSpan)),
-          wordCount: subWordCount,
+          pageStart: Math.max(1, Math.round(merged.pageStart + ratio * pageSpan)),
+          pageEnd: Math.max(1, Math.round(merged.pageStart + endRatio * pageSpan)),
+          wordCount: slice.length,
         });
-        subPartIndex++;
+        subPart++;
       }
     }
   }
@@ -244,9 +249,103 @@ export function chunkDocument(
     totalWords,
     clauses,
     definitionsText,
-    chunks,
+    chunks: finalChunks,
     isSinglePass: false,
   };
+}
+
+// ── Merge small adjacent clauses ───────────────────────────────────────────
+
+interface MergedChunk {
+  clauseNumber: string;
+  clauseTitle: string;
+  text: string;
+  pageStart: number;
+  pageEnd: number;
+  wordCount: number;
+}
+
+function mergeClauses(clauses: ClauseInfo[]): MergedChunk[] {
+  if (clauses.length === 0) return [];
+
+  const merged: MergedChunk[] = [];
+  let current: MergedChunk = {
+    clauseNumber: clauses[0].number,
+    clauseTitle: clauses[0].title,
+    text: clauses[0].text,
+    pageStart: clauses[0].pageStart,
+    pageEnd: clauses[0].pageEnd,
+    wordCount: clauses[0].wordCount,
+  };
+
+  for (let i = 1; i < clauses.length; i++) {
+    const clause = clauses[i];
+    const combinedWords = current.wordCount + clause.wordCount;
+
+    // Merge if combined size is under target, or if current chunk is tiny
+    if (combinedWords <= TARGET_CHUNK_WORDS || current.wordCount < 200) {
+      current.text += "\n\n" + clause.text;
+      current.wordCount = combinedWords;
+      current.pageEnd = clause.pageEnd;
+      current.clauseTitle = `${current.clauseTitle} + ${clause.title}`;
+      // Keep the first clause number as the chunk number
+    } else {
+      // Current chunk is big enough — push it and start new
+      merged.push(current);
+      current = {
+        clauseNumber: clause.number,
+        clauseTitle: clause.title,
+        text: clause.text,
+        pageStart: clause.pageStart,
+        pageEnd: clause.pageEnd,
+        wordCount: clause.wordCount,
+      };
+    }
+  }
+
+  // Push the last chunk
+  merged.push(current);
+
+  // If we still have too many chunks, do a second merge pass
+  if (merged.length > MAX_CHUNKS) {
+    return forceReduceChunks(merged);
+  }
+
+  return merged;
+}
+
+/**
+ * If we have more than MAX_CHUNKS, force-merge adjacent chunks
+ * until we're at the limit.
+ */
+function forceReduceChunks(chunks: MergedChunk[]): MergedChunk[] {
+  while (chunks.length > MAX_CHUNKS) {
+    // Find the smallest adjacent pair to merge
+    let minCombined = Infinity;
+    let mergeAt = 0;
+    for (let i = 0; i < chunks.length - 1; i++) {
+      const combined = chunks[i].wordCount + chunks[i + 1].wordCount;
+      if (combined < minCombined) {
+        minCombined = combined;
+        mergeAt = i;
+      }
+    }
+
+    const a = chunks[mergeAt];
+    const b = chunks[mergeAt + 1];
+    const merged: MergedChunk = {
+      clauseNumber: a.clauseNumber,
+      clauseTitle: `${a.clauseTitle} + ${b.clauseTitle}`,
+      text: a.text + "\n\n" + b.text,
+      pageStart: a.pageStart,
+      pageEnd: b.pageEnd,
+      wordCount: a.wordCount + b.wordCount,
+    };
+
+    chunks.splice(mergeAt, 2, merged);
+  }
+
+  return chunks;
 }
 
 // ── Utility ────────────────────────────────────────────────────────────────
