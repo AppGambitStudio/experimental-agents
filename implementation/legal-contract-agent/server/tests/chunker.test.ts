@@ -4,7 +4,7 @@ import {
   chunkDocument,
   extractClauses,
   estimateProcessingTime,
-} from "../chunker.ts";
+} from "../chunker.js";
 
 // ── Test helper ────────────────────────────────────────────────────────────
 
