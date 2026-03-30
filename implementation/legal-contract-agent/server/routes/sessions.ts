@@ -146,8 +146,20 @@ sessionRoutes.post("/", async (c) => {
 
         await runAgentTurnAndCollect(session.id, initialPrompt);
       } else {
-        // Chunked analysis — loop through chunks sequentially
+        // Chunked analysis — NON-CONVERSATIONAL extraction phase
+        // Each chunk uses a focused extraction prompt (no questions, no chat)
+        // Only the final consolidation uses the full copilot prompt for conversation
         const totalChunks = chunkResult.chunks.length;
+        const allFindings: string[] = [];
+
+        const EXTRACTION_PROMPT = `You are a contract risk extraction engine. Your job is to analyze a single clause and output ONLY the findings — no questions, no conversation, no "would you like to know more". Be direct and concise.
+
+For each risk found, output exactly:
+- **[SEVERITY] Clause X.X: Title** — One-sentence description of the risk and the applicable Indian law.
+
+If no risks are found in this clause, output: "No risks identified in this clause."
+
+Use search_clause_patterns and check_enforceability tools to validate your findings. Do NOT ask the user any questions.`;
 
         for (let i = 0; i < totalChunks; i++) {
           const chunk = chunkResult.chunks[i];
@@ -158,46 +170,83 @@ sessionRoutes.post("/", async (c) => {
               total: totalChunks,
               clauseNumber: chunk.clauseNumber,
               clauseTitle: chunk.clauseTitle,
+              status: "analyzing",
             },
           });
 
-          const chunkPrompt = `Analyze the following clause from a ${body.contractType} contract between us (${body.ourRole}) and ${body.counterparty}.
+          const chunkPrompt = `Contract: ${body.contractType} between us (${body.ourRole}) and ${body.counterparty}. State: ${body.state}.
 
-Contract state: ${body.state}
-${body.contractValue ? `Contract value: INR ${body.contractValue.toLocaleString("en-IN")}` : ""}
+${chunkResult.definitionsText ? `DEFINITIONS (for reference):\n${chunkResult.definitionsText.slice(0, 2000)}\n\n---\n\n` : ""}CLAUSE ${chunk.clauseNumber} — ${chunk.clauseTitle} (pages ${chunk.pageStart}-${chunk.pageEnd}):
 
-${chunkResult.definitionsText ? `DEFINITIONS SECTION (for context):\n${chunkResult.definitionsText}\n\n` : ""}CLAUSE ${chunk.clauseNumber} — ${chunk.clauseTitle} (pages ${chunk.pageStart}-${chunk.pageEnd}):
 ${chunk.text}
 
-Analyze this clause for:
-1. Risk patterns (use search_clause_patterns)
-2. Enforceability issues under Indian law
-3. Missing protections
-Keep your analysis focused on this specific clause. Quote the exact problematic text.`;
+Extract risks. Use search_clause_patterns and check_enforceability. Output findings only — no questions.`;
 
-          await runAgentTurnAndCollect(session.id, chunkPrompt);
+          // Use extraction prompt instead of conversational copilot prompt
+          await new Promise<void>((resolve) => {
+            const emitter = runAgentTurn({
+              prompt: chunkPrompt,
+              systemPrompt: EXTRACTION_PROMPT,
+              sessionId: undefined, // fresh context per chunk — no conversation carryover
+            });
+
+            emitter.on("event", (event: AgentEvent) => {
+              if (event.type === "text") {
+                const text = (event as any).text ?? (event as any).data?.text ?? "";
+                if (text) allFindings.push(`### Chunk ${i + 1}: ${chunk.clauseTitle}\n${text}`);
+                // Don't stream chunk text to the user — collect silently
+              }
+              if (event.type === "done" || event.type === "error") {
+                pushEvent(session.id, {
+                  type: "chunk_progress",
+                  data: {
+                    current: i + 1,
+                    total: totalChunks,
+                    clauseNumber: chunk.clauseNumber,
+                    clauseTitle: chunk.clauseTitle,
+                    status: "done",
+                  },
+                });
+                resolve();
+              }
+            });
+          });
         }
 
-        // Consolidation turn — check for missing clauses, stamp duty, regulations
+        // Consolidation — now use the CONVERSATIONAL copilot prompt
+        // Feed all collected findings as context and let the copilot present them
         pushEvent(session.id, {
           type: "chunk_progress",
           data: {
             current: totalChunks,
             total: totalChunks,
             clauseNumber: "final",
-            clauseTitle: "Consolidation",
+            clauseTitle: "Preparing your analysis...",
+            status: "analyzing",
           },
         });
 
-        const consolidationPrompt = `You have now analyzed all ${totalChunks} clauses of this ${body.contractType} contract.
+        const consolidationPrompt = `You have analyzed a ${body.contractType} contract (${file.pageCount} pages) between us (${body.ourRole}) and ${body.counterparty}. State: ${body.state}.${body.contractValue ? ` Value: INR ${body.contractValue.toLocaleString("en-IN")}.` : ""}
 
-Now perform the consolidation checks:
-1. Use get_required_clauses for contract type "${body.contractType}" to identify any MISSING clauses
-2. Use get_stamp_duty for state "${body.state}"${body.contractValue ? ` and value INR ${body.contractValue.toLocaleString("en-IN")}` : ""}
-3. Use get_applicable_regulations for contract type "${body.contractType}"
-4. Provide an overall risk summary with a score from 0-100
+Here are the clause-by-clause findings from the analysis:
 
-Give a consolidated summary of all findings across the entire contract.`;
+${allFindings.join("\n\n")}
+
+Now:
+1. Use get_required_clauses for "${body.contractType}" to check for MISSING clauses
+2. Use get_stamp_duty for state "${body.state}"${body.contractValue ? `, value ${body.contractValue}` : ""}
+3. Use get_applicable_regulations for "${body.contractType}"
+4. Use get_contract_limitations to include the disclaimer
+
+Present a CONSOLIDATED analysis:
+- Overall risk score (0-100) and grade (A-F)
+- Executive summary (3-5 sentences in plain language)
+- Top risks ordered by severity (critical first)
+- Missing clauses
+- Stamp duty requirements
+- What the user should negotiate first
+
+After presenting, you are now in INTERACTIVE MODE. The user can ask follow-up questions about any clause, request alternative language, or ask for a negotiation playbook.`;
 
         await runAgentTurnAndCollect(session.id, consolidationPrompt);
       }
