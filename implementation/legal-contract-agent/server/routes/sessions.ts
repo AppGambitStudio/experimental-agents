@@ -333,23 +333,15 @@ sessionRoutes.get("/:id/stream", async (c) => {
         status: session.status,
       });
 
-      // Poll for new events at 100ms intervals
+      // Poll for new events — stream stays open for the entire session
       const interval = setInterval(() => {
         const events = drainEvents(sessionId);
         for (const evt of events) {
-          send(evt.type, evt.data);
-        }
-
-        // If session is active or error, and no more pending events, close
-        const current = getSession(sessionId);
-        if (
-          current &&
-          (current.status === "active" || current.status === "error") &&
-          events.length === 0
-        ) {
-          send("stream_end", { status: current.status });
-          clearInterval(interval);
-          controller.close();
+          try {
+            send(evt.type, evt.data ?? evt);
+          } catch {
+            clearInterval(interval);
+          }
         }
       }, 100);
 

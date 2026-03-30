@@ -14,10 +14,23 @@ interface ChatProps {
 export default function Chat({ messages, activeTools, isProcessing, onSendMessage }: ChatProps) {
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const userScrolledUpRef = useRef(false);
 
+  // Only auto-scroll if user hasn't scrolled up to read
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!userScrolledUpRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages, activeTools, isProcessing]);
+
+  const handleScroll = () => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    // If user is within 100px of bottom, they're "following" — allow auto-scroll
+    userScrolledUpRef.current = scrollHeight - scrollTop - clientHeight > 100;
+  };
 
   const handleSend = () => {
     const trimmed = input.trim();
@@ -36,7 +49,7 @@ export default function Chat({ messages, activeTools, isProcessing, onSendMessag
   return (
     <div className="flex flex-col" style={{ height: "calc(100vh - 260px)" }}>
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-2">
+      <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-2">
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
