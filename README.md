@@ -1,13 +1,30 @@
 # Experimental Agents
 
-Research documents, specifications, and reference implementations for building production-grade AI agents. Built by [Antigravity Apps](https://antigravityapps.dev) / [AppGambit](https://appgambit.com).
+Research documents, specifications, and reference implementations for building production-grade AI agents.
+
+## Why More Specs Than Implementations?
+
+This repo deliberately follows a **spec-first, implement-second** approach. Each agent goes through a multi-stage pipeline before code is written:
+
+1. **Research & domain analysis** — understand the problem space, talk to domain experts, study existing workflows
+2. **Specification** — write a comprehensive spec covering architecture, data models, tool interfaces, edge cases, and compliance requirements. Specs are 1,000-3,800 lines each — detailed enough to be implementable by any developer.
+3. **Reference patterns** — distill agentic design patterns, failure modes, and SDK capabilities into reusable knowledge that applies across all agents
+4. **Implementation MVP** — build the working agent with MCP servers, tests, web UI, and interactive copilot
+
+We currently have **10 specs** and **2 implementations** because:
+- Writing a thorough spec surfaces 80% of the hard problems before a single line of code is written
+- Specs are refined through multiple rounds — incorporating domain expertise, legal requirements, and real-world constraints
+- Implementation only starts once the spec is stable and the architectural decisions are validated
+- This prevents the most expensive kind of rework: building the wrong thing
+
+The remaining 8 specs are queued for implementation based on customer priority and domain readiness.
 
 ## Repository Structure
 
 ```
 ├── reference/          # Agentic knowledge base — patterns, playbooks, failure modes
-├── specs/              # Real-world agent specifications
-├── implementation/     # Working code (TypeScript, MCP servers, tests)
+├── specs/              # Real-world agent specifications (10 agents)
+├── implementation/     # Working code — TypeScript, MCP servers, web UI, tests (2 agents)
 ```
 
 ## Reference
