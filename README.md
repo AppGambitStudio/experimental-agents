@@ -36,6 +36,7 @@ The remaining 8 specs are queued for implementation based on customer priority a
 | [Agentic Design Patterns Reference](reference/agentic-design-patterns-reference.md) | Distilled patterns from Google's 482-page guide — prompt chaining, routing, parallelization, reflection, tool use, planning, multi-agent, memory, guardrails, reasoning. With priority implementation table. |
 | [Common Agent Failure Modes](reference/common-agent-failure-modes.md) | 10 failure modes with symptoms, root causes, and mitigations — recursive loops, tool over-reliance, cascade failure, hallucinated results, context saturation, prompt injection, over-confident risk, state without rollback, blind retry, information hoarding. |
 | [Claude Agent SDK Patterns](reference/claude-agent-sdk-patterns.md) | Subagents (parallel execution, context isolation, tool restrictions), Slash Commands (built-in + custom with arguments/bash execution), and Agent Skills (autonomous invocation, SKILL.md format). With application examples for our real estate agent. |
+| [Claude Managed Agents + AWS Reference](reference/claude-managed-agents-aws-reference.md) | Practical guide to building production apps with Claude Managed Agents on AWS. Covers agent/environment/session lifecycle, built-in + custom tools, MCP servers, Files API (multi-file support), SSE streaming, cost analysis ($0.08/session-hr), and full AWS integration architecture with SST Ion, DynamoDB, S3, Cognito, and Lambda. |
 
 ## Agent Specs
 
