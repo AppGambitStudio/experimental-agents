@@ -4,7 +4,7 @@ A practical guide to building production applications using Claude Managed Agent
 
 **Audience:** Developers building multi-tenant, agent-powered applications on AWS.
 
-**Last validated:** April 2026 | **Beta header:** `managed-agents-2026-04-01` | **SDK:** `@anthropic-ai/sdk` (TypeScript), `anthropic` (Python)
+**Last validated:** April 2026 | **Beta header:** `managed-agents-2026-04-01` | **SDK:** `@anthropic-ai/sdk` (TypeScript), `anthropic` (Python) | **Memory stores:** public beta
 
 ---
 
@@ -18,10 +18,11 @@ A practical guide to building production applications using Claude Managed Agent
 6. [Events & Streaming](#6-events--streaming)
 7. [Tools — Built-in, Custom, and MCP](#7-tools--built-in-custom-and-mcp)
 8. [Files API](#8-files-api)
-9. [AWS Integration Architecture](#9-aws-integration-architecture)
-10. [Cost Analysis](#10-cost-analysis)
-11. [When to Use vs Alternatives](#11-when-to-use-vs-alternatives)
-12. [Real-World Example: Multi-Tenant Contract Review Platform](#12-real-world-example-multi-tenant-contract-review-platform)
+9. [Memory Stores](#9-memory-stores)
+10. [AWS Integration Architecture](#10-aws-integration-architecture)
+11. [Cost Analysis](#11-cost-analysis)
+12. [When to Use vs Alternatives](#12-when-to-use-vs-alternatives)
+13. [Real-World Example: Multi-Tenant Contract Review Platform](#13-real-world-example-multi-tenant-contract-review-platform)
 
 ---
 
@@ -732,7 +733,200 @@ await content.writeToFile("analysis-report.md");
 
 ---
 
-## 9. AWS Integration Architecture
+## 9. Memory Stores
+
+Memory stores give agents persistent memory that survives across sessions. Each attached store is mounted as a directory under `/mnt/memory/` inside the session container, and the agent reads/writes it using the standard agent toolset (the same file tools it uses for the rest of the filesystem). A note describing each mount — path, access mode, store `description`, and any session-level `instructions` — is automatically added to the system prompt so the agent knows where to look.
+
+> **Public Beta (April 2026):** Memory stores graduated from research preview to public beta on the Claude Platform. Access is available to all Managed Agents users — no separate request form. All requests still require the `managed-agents-2026-04-01` beta header (SDKs set it automatically).
+
+### Core Concepts
+
+- **Memory Store** (`memstore_...`) — workspace-scoped collection of text documents. Described to the agent via `name` and `description`.
+- **Memory** — individual document within a store, addressed by path. Capped at 100 kB each. Tune/import/export directly via API or Console.
+- **Memory Version** (`memver_...`) — immutable snapshot created on every mutation. Versions belong to the store (not the memory), so history survives the memory itself. Retained for 30 days; recent versions are always kept regardless of age.
+
+### Creating a Memory Store
+
+```typescript
+const store = await client.beta.memoryStores.create({
+  name: "Client Context — Sharma Associates",
+  description: "Preferences, standard terms, negotiation history, and past analysis findings for Sharma & Associates.",
+});
+// store.id = "memstore_01Hx..."
+```
+
+### Seeding with Content
+
+Pre-load reference material before any session runs. `memories.create` does not overwrite — use `memories.update` to change an existing memory.
+
+```typescript
+await client.beta.memoryStores.memories.create(store.id, {
+  path: "/preferences/contract_standards.md",
+  content: "Sharma prefers Gujarat governing law. Standard indemnity cap: 2x contract value. Always flag non-compete clauses — they push back on these.",
+});
+
+await client.beta.memoryStores.memories.create(store.id, {
+  path: "/history/2026-03-msa-abc-corp.md",
+  content: "MSA with ABC Corp (March 2026): IP assignment clause was problematic — renegotiated to license-only. Limitation of liability was uncapped — negotiated to 3x annual fees.",
+});
+```
+
+### Attaching to a Session
+
+Memory stores go in the session's `resources[]` array, alongside files. Unlike files and repos, **memory stores can only be attached at session creation** — they cannot be added or removed from a running session.
+
+```typescript
+const session = await client.beta.sessions.create({
+  agent: agent.id,
+  environment_id: environment.id,
+  resources: [
+    // Files
+    { type: "file", file_id: contractFile.id, mount_path: "/workspace/contract.pdf" },
+    // Memory — client-specific (read-write, agent learns from this session)
+    {
+      type: "memory_store",
+      memory_store_id: clientMemoryStore.id,
+      access: "read_write",
+      instructions: "This client's preferences, history, and past findings. Check before starting analysis. Write new learnings when done.",
+    },
+    // Memory — legal knowledge base (read-only, shared across all sessions)
+    {
+      type: "memory_store",
+      memory_store_id: legalKbStore.id,
+      access: "read_only",
+      instructions: "Indian contract law reference material. Search when analyzing clause enforceability.",
+    },
+  ],
+});
+```
+
+- `access` defaults to `read_write`. Use `read_only` for reference material or any store the agent shouldn't mutate.
+- `instructions` is capped at 4,096 characters and is shown to the agent alongside the store's `name`/`description`.
+- The agent toolset must be enabled at agent creation for memory interactions to work.
+
+> **Prompt-injection warning:** `read_write` mounts let any successful injection persist into memory that later sessions read as trusted. Use `read_only` for any store the agent doesn't need to modify — especially shared knowledge bases or stores touched by sessions that process untrusted input.
+
+### How the Agent Accesses Memory
+
+- Mounts live under `/mnt/memory/<store>/` inside the session container.
+- Reads/writes use the standard agent file tools — there are no dedicated `memory_*` tools.
+- `access` is enforced at the filesystem layer: `read_only` mounts reject writes; writes to `read_write` mounts produce a new **memory version** attributed to the session.
+- Reads and writes appear in the event stream as ordinary `agent.tool_use` / `agent.tool_result` events.
+- Writes persist to the store and stay in sync across concurrent sessions that share it. For safe concurrent edits via API, use the `content_sha256` precondition (see below).
+
+### Managing Memories via API
+
+```typescript
+// List memories (supports path_prefix, order_by, depth)
+const page = await client.beta.memoryStores.memories.list(store.id, {
+  path_prefix: "/preferences/",
+  order_by: "path",
+  depth: 2,
+});
+
+// Read a specific memory
+const mem = await client.beta.memoryStores.memories.retrieve(memoryId, {
+  memory_store_id: store.id,
+});
+
+// Update content, rename, or both
+await client.beta.memoryStores.memories.update(mem.id, {
+  memory_store_id: store.id,
+  path: "/archive/2026_q1_formatting.md", // rename
+});
+
+// Optimistic concurrency — only applies if hash still matches
+await client.beta.memoryStores.memories.update(mem.id, {
+  memory_store_id: store.id,
+  content: "CORRECTED: Always use 2-space indentation.",
+  precondition: { type: "content_sha256", content_sha256: mem.content_sha256 },
+});
+
+// Delete
+await client.beta.memoryStores.memories.delete(memoryId, {
+  memory_store_id: store.id,
+});
+```
+
+### Audit Trail (Memory Versions)
+
+Every mutation creates an immutable version. Use for compliance, point-in-time recovery, or debugging.
+
+```typescript
+// List version history (newest first; filter by memory_id for a single memory)
+for await (const v of client.beta.memoryStores.memoryVersions.list(store.id, {
+  memory_id: mem.id,
+})) {
+  console.log(`${v.id}: ${v.operation} at ${v.created_at}`);
+}
+
+// Retrieve a specific version (includes full content)
+const version = await client.beta.memoryStores.memoryVersions.retrieve(versionId, {
+  memory_store_id: store.id,
+});
+
+// Rollback: write the old content back as a new version
+await client.beta.memoryStores.memories.update(mem.id, {
+  memory_store_id: store.id,
+  content: version.content,
+});
+
+// Redact sensitive content from history (preserves audit metadata: who/when)
+// Note: the version currently serving as head of a live memory cannot be redacted —
+// write a new version first (or delete the memory), then redact the old one.
+await client.beta.memoryStores.memoryVersions.redact(versionId, {
+  memory_store_id: store.id,
+});
+```
+
+There is no dedicated restore endpoint — roll back by writing a version's `content` back via `memories.update` (or `memories.create` if the parent was deleted; versions outlive their parent).
+
+### Managing Stores
+
+Beyond `create`, stores support `retrieve`, `update`, `list` (pass `include_archived: true` to include archived), `archive` (one-way; makes the store read-only and blocks new session attachments), and `delete` (permanent; only if no sessions reference it).
+
+### Beta Limits
+
+| Limit | Value |
+|------|------|
+| Memory stores per organization | 1,000 |
+| Memories per store | 2,000 |
+| Total storage per store | 100 MB |
+| Versions per store | 250,000 |
+| Size per memory | 100 kB (~25K tokens) |
+| Version history retention | 30 days (recent versions always kept) |
+| Memory stores per session | 8 |
+| `instructions` per attachment | 4,096 characters |
+
+### Multi-Tenant Memory Architecture
+
+For a platform with multiple operators, each serving multiple clients:
+
+```
+Memory Store: "Legal KB" (shared, read-only)
+├── /indian-law/contract-act-1872.md
+├── /indian-law/dpdpa-2023.md
+├── /regulations/fema-compliance.md
+└── /patterns/common-risky-clauses.md
+
+Memory Store: "Client — Sharma Associates" (per-client, read-write)
+├── /preferences/contract_standards.md
+├── /preferences/negotiation_style.md
+├── /history/2026-03-msa-abc-corp.md
+├── /history/2026-04-nda-techstartup.md
+└── /findings/recurring-risk-patterns.md
+
+Memory Store: "Client — Patel Industries" (per-client, read-write)
+├── /preferences/contract_standards.md
+├── /history/2026-02-vendor-agreement.md
+└── /findings/ip-clause-concerns.md
+```
+
+Each session attaches: shared Legal KB (read-only) + relevant client memory (read-write).
+
+---
+
+## 10. AWS Integration Architecture
 
 ### Reference Architecture: Multi-Tenant Agent Platform
 
@@ -964,7 +1158,7 @@ Backend Lambda → Anthropic SSE stream → DynamoDB (writes events)
 
 ---
 
-## 10. Cost Analysis
+## 11. Cost Analysis
 
 ### Pricing Components
 
@@ -1001,7 +1195,7 @@ Session runtime at $0.08/hour is negligible compared to model token costs. This 
 
 ---
 
-## 11. When to Use vs Alternatives
+## 12. When to Use vs Alternatives
 
 ### Use Claude Managed Agents When
 
@@ -1044,7 +1238,7 @@ Session runtime at $0.08/hour is negligible compared to model token costs. This 
 
 ---
 
-## 12. Real-World Example: Multi-Tenant Contract Review Platform
+## 13. Real-World Example: Multi-Tenant Contract Review Platform
 
 ### Problem
 
